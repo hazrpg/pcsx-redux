@@ -140,7 +140,6 @@ void PCSX::Emulator::setLua() {
 PCSX::Emulator::~Emulator() {
     // TODO: move Lua to g_system.
     m_lua->close();
-    MCPServer::Stop(); // Stop MCP Server
 }
 
 int PCSX::Emulator::init() {
@@ -149,20 +148,23 @@ int PCSX::Emulator::init() {
     int ret = R3000Acpu::psxInit();
 
     // MCP Server Integration
+    // MCP is served via WebServer at /mcp endpoint - ensure WebServer is enabled
     auto& debugSettings = settings.get<SettingDebugSettings>();
     if (debugSettings.get<PCSX::Emulator::DebugSettings::MCPServer>()) {
-        // Enable WebServer automatically when MCP is enabled
-        // The MCP endpoint is served via WebServer at /mcp
-        if (!debugSettings.get<PCSX::Emulator::DebugSettings::WebServer>()) {
-            debugSettings.get<PCSX::Emulator::DebugSettings::WebServer>().value = true;
-        }
-        // Use MCP server port for WebServer
-        debugSettings.get<PCSX::Emulator::DebugSettings::WebServerPort>().value = 
-            debugSettings.get<PCSX::Emulator::DebugSettings::MCPServerPort>().value;
+        auto& webServerEnabled = debugSettings.get<PCSX::Emulator::DebugSettings::WebServer>();
+        auto& webServerPort = debugSettings.get<PCSX::Emulator::DebugSettings::WebServerPort>();
+        auto mcpPort = debugSettings.get<PCSX::Emulator::DebugSettings::MCPServerPort>().value;
         
-        std::cout << "MCP Server endpoint will be available at http://localhost:" 
-                  << debugSettings.get<PCSX::Emulator::DebugSettings::MCPServerPort>().value 
-                  << "/mcp" << std::endl;
+        if (!webServerEnabled.value) {
+            webServerEnabled.value = true;
+            webServerPort.value = mcpPort;
+            std::cout << "MCP Server: Auto-enabled WebServer on port " << mcpPort << std::endl;
+        } else if (webServerPort.value != mcpPort) {
+            std::cout << "MCP Server: Using existing WebServer port " << webServerPort.value 
+                      << " (ignoring MCPServerPort setting)" << std::endl;
+        }
+        
+        std::cout << "MCP endpoint available at http://localhost:" << webServerPort.value << "/mcp" << std::endl;
     }
 
     const auto& args = g_system->getArgs();

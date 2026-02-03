@@ -187,27 +187,6 @@ class MCPServer {
     };
 
     /**
-     * @brief Initialize MCP Server
-     * @param config Server configuration
-     */
-    static bool Initialize(const Config& config);
-
-    /**
-     * @brief Start MCP Server
-     */
-    static bool Start();
-
-    /**
-     * @brief Stop MCP Server
-     */
-    static void Stop();
-
-    /**
-     * @brief Check if server is running
-     */
-    static bool IsRunning();
-
-    /**
      * @brief Get all available tools
      */
     static std::vector<Tool> ListTools();
@@ -291,10 +270,6 @@ class MCPServer {
     static std::string HandleMCPRequest(const std::string& request);
 
     // Internal state
-    static std::atomic<bool> running_;
-    static std::atomic<bool> server_running_;
-    static std::thread server_thread_;
-    static std::mutex server_mutex_;
     static Config config_;
 
     // Breakpoints storage
@@ -306,6 +281,9 @@ class MCPServer {
   private:
     MCPServer() = default;
     ~MCPServer() = default;
+
+    // Internal helper to register all tools
+    static void RegisterToolsIfNeeded();
 
     // Tool implementations (these are private helper functions for ExecuteTool)
     static ToolResult ToolGetCPUState();
@@ -332,8 +310,6 @@ class MCPServer {
     static std::string SerializeState(const MemoryState& state);
     static std::string SerializeState(const GPUState& state);
     static std::string SerializeState(const HardwareState& state);
-
-    static void RegisterToolsIfNeeded();
 };
 
 }  // namespace PCSX

@@ -22,34 +22,14 @@
 #include <iostream>
 #include <string>
 #include <vector>
-#include <atomic>
-#include <mutex>
-#include <thread>
 #include <unordered_map>
 #include <stdexcept>
-#include <chrono>
 
-// For TCP sockets
-#ifdef _WIN32
-#include <winsock2.h>
-#pragma comment(lib, "ws2_32.lib")
-#else
-#include <sys/socket.h>
-#include <netinet/in.h>
-#include <arpa/inet.h>
-#include <unistd.h>
-#endif
-
-// Include nlohmann/json for JSON parsing and serialization
 #include "third_party/json.hpp"
 
 namespace PCSX {
 
-// Static member initialization
-std::atomic<bool> MCPServer::running_ = false;
-std::atomic<bool> MCPServer::server_running_ = false;
-std::thread MCPServer::server_thread_;
-std::mutex MCPServer::server_mutex_;
+// Static member initialization  
 MCPServer::Config MCPServer::config_;
 std::unordered_map<uint32_t, MCPServer::Breakpoint> MCPServer::breakpoints_;
 std::unordered_map<std::string, MCPServer::Tool> MCPServer::tools_;
@@ -76,172 +56,6 @@ void MCPServer::RegisterToolsIfNeeded() {
     tools_["get_call_chain"] = {"get_call_chain", "Trace the call chain from the current instruction"};
     tools_["get_call_graph"] = {"get_call_graph", "Get function call graph for a specific function"};
     tools_["get_emulator_state"] = {"get_emulator_state", "Get comprehensive emulator state"};
-}
-
-// Helper function to send data over socket
-static void SendData(int socket, const std::string& data) {
-    // Add length prefix to the data (4 bytes, network byte order)
-    uint32_t length = data.length();
-    uint32_t net_length = htonl(length);
-    send(socket, (char*)&net_length, sizeof(net_length), 0);
-    send(socket, data.c_str(), length, 0);
-}
-
-// Helper function to receive data from socket
-static std::string ReceiveData(int socket) {
-    // Receive length prefix
-    uint32_t net_length;
-    int bytes_received = recv(socket, (char*)&net_length, sizeof(net_length), 0);
-    if (bytes_received <= 0) {
-        return ""; // Error or connection closed
-    }
-    uint32_t length = ntohl(net_length);
-
-    std::string data(length, '\0');
-    bytes_received = recv(socket, (char*)data.c_str(), length, 0);
-    if (bytes_received <= 0) {
-        return ""; // Error or connection closed
-    }
-    return data;
-}
-
-
-static void ClientHandler(int client_socket) {
-    while (MCPServer::server_running_) {
-        std::string request_str = ReceiveData(client_socket);
-        if (request_str.empty()) {
-            break; // Client disconnected or error
-        }
-
-        std::string response_str = MCPServer::HandleMCPRequest(request_str);
-        SendData(client_socket, response_str);
-    }
-#ifdef _WIN32
-    closesocket(client_socket);
-#else
-    close(client_socket);
-#endif
-}
-
-static void ServerLoop() {
-#ifdef _WIN32
-    WSADATA wsa_data;
-    if (WSAStartup(MAKEWORD(2, 2), &wsa_data) != 0) {
-        std::cerr << "WSAStartup failed.\n";
-        MCPServer::server_running_ = false;
-        return;
-    }
-#endif
-
-    int server_fd = -1;
-    try {
-        server_fd = socket(AF_INET, SOCK_STREAM, 0);
-        if (server_fd == -1) {
-            throw std::runtime_error("Failed to create socket");
-        }
-
-        // Allow immediate reuse of the port
-        int optval = 1;
-        setsockopt(server_fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&optval, sizeof(optval));
-
-        sockaddr_in address;
-        address.sin_family = AF_INET;
-        address.sin_addr.s_addr = inet_addr(MCPServer::config_.host.c_str());
-        address.sin_port = htons(MCPServer::config_.port);
-
-        if (bind(server_fd, (sockaddr*)&address, sizeof(address)) < 0) {
-            throw std::runtime_error("Failed to bind socket");
-        }
-
-        if (listen(server_fd, 5) < 0) {
-            throw std::runtime_error("Failed to listen on socket");
-        }
-
-        std::cout << "MCP Server listening on " << MCPServer::config_.host << ":" << MCPServer::config_.port << std::endl;
-        MCPServer::server_running_ = true;
-
-        while (MCPServer::server_running_) {
-            sockaddr_in client_address;
-            socklen_t client_len = sizeof(client_address);
-#ifdef _WIN32
-            int client_socket = accept(server_fd, (sockaddr*)&client_address, &client_len);
-#else
-            int client_socket = accept(server_fd, (sockaddr*)&client_address, &client_len);
-#endif
-            if (client_socket < 0) {
-                if (!MCPServer::server_running_) {
-                    break; // Server stopped
-                }
-                std::cerr << "Failed to accept client connection\n";
-                continue;
-            }
-
-            std::thread(ClientHandler, client_socket).detach();
-        }
-
-    } catch (const std::exception& e) {
-        std::cerr << "MCP Server error: " << e.what() << std::endl;
-    }
-
-    if (server_fd != -1) {
-#ifdef _WIN32
-        closesocket(server_fd);
-        WSACleanup();
-#else
-        close(server_fd);
-#endif
-    }
-    MCPServer::server_running_ = false;
-    MCPServer::running_ = false;
-    std::cout << "MCP Server stopped." << std::endl;
-}
-
-bool MCPServer::Initialize(const Config& config) {
-    if (running_) {
-        std::cerr << "MCP Server already initialized.\n";
-        return false;
-    }
-    config_ = config;
-    running_ = true;
-    RegisterToolsIfNeeded();
-
-    return true;
-}
-
-bool MCPServer::Start() {
-    if (!running_ || server_running_) {
-        std::cerr << "MCP Server not initialized or already running.\n";
-        return false;
-    }
-
-    // Launch server thread
-    server_thread_ = std::thread(ServerLoop);
-    server_thread_.detach(); // Detach to run in background
-
-    // Wait a bit for the server to start up
-    std::this_thread::sleep_for(std::chrono::milliseconds(100));
-    return server_running_;
-}
-
-void MCPServer::Stop() {
-    if (!running_) {
-        return;
-    }
-    server_running_ = false; // Signal server to stop
-    running_ = false;
-
-    // TODO: Gracefully close the server socket to unblock accept()
-    // For now, accept() might block until timeout or another connection.
-    // A simple way is to connect to itself to unblock it.
-    
-    // std::cout << "Stopping MCP Server...\n";
-    // if (server_thread_.joinable()) {
-    //     server_thread_.join();
-    // }
-}
-
-bool MCPServer::IsRunning() {
-    return server_running_;
 }
 
 std::vector<MCPServer::Tool> MCPServer::ListTools() {
