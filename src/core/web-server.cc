@@ -1266,7 +1266,14 @@ struct PCSX::WebClient::WebClientImpl {
     }
     int executeRequest() {
         m_requestData.method = static_cast<RequestData::Method>(m_httpParser.method);
-        if (m_requestData.method != RequestData::Method::HTTP_OPTIONS) {
+        // Don't log OPTIONS requests or GET requests to /mcp (they're usually connection probes)
+        bool shouldLog = m_requestData.method != RequestData::Method::HTTP_OPTIONS;
+        if (shouldLog && m_requestData.method == RequestData::Method::HTTP_HTTP_GET && 
+            m_requestData.urlData.path == "/mcp") {
+            shouldLog = false;  // Suppress MCP GET probe logging
+        }
+        
+        if (shouldLog) {
             auto methodName = magic_enum::enum_name(m_requestData.method);
             g_system->log(LogClass::WEBSERVER, "Received web api request (%.*s), path: %s, query: %s\n",
                           int(methodName.size()), methodName.data(), m_requestData.urlData.path.c_str(),
