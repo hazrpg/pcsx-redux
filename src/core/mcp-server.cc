@@ -176,14 +176,14 @@ MCPServer::MemoryState MCPServer::GetMemoryState() {
 MCPServer::GPUState MCPServer::GetGPUState() {
     GPUState state = {};
     if (g_emulator && g_emulator->m_gpu) {
-        // Mock values for now, as direct access to GPU state might be more complex
-        state.gpu_read = 0; //g_emulator->m_gpu->GPUREAD;
-        state.gpu_reg = 0; //g_emulator->m_gpu->GPUREG;
-        state.gp1 = 0; //g_emulator->m_gpu->GP1;
-        state.status = 0; //g_emulator->m_gpu->STATUS;
-        state.dirty_flag = false; //g_emulator->m_gpu->dirty_flag;
-
-        state.display_mode = {0, 0, 0, 0}; // TODO: Get actual display mode
+        state.status = g_emulator->m_gpu->readStatus();
+        // Note: Other GPU registers may not be directly accessible
+        // The status register contains most useful GPU state information
+        state.gpu_read = 0;  // Would need GPU-specific interface
+        state.gpu_reg = 0;   // Would need GPU-specific interface
+        state.gp1 = 0;       // Would need GPU-specific interface
+        state.dirty_flag = false;
+        state.display_mode = {0, 0, 0, 0};  // Parsed from status if needed
     }
     return state;
 }
@@ -236,29 +236,152 @@ bool MCPServer::ClearBreakpoint(uint32_t address) {
 }
 
 std::vector<std::string> MCPServer::ListHardwareRegisters() {
-    // TODO: Populate with actual hardware register names from PCSX-Redux
-    return {"GPUREAD", "GPUREG", "GP1", "STATUS", "DMA0_CR", "DMA1_CR", "TIMER0_COUNT"};
+    // List of all known PSX hardware registers
+    return {
+        // Interrupt Control
+        "I_STAT",    // 0x1070 - Interrupt Status
+        "I_MASK",    // 0x1074 - Interrupt Mask
+        
+        // DMA Registers
+        "DMA_DPCR",  // 0x10f0 - DMA Control
+        "DMA_DICR",  // 0x10f4 - DMA Interrupt Control
+        
+        // DMA Channel 0 (MDECin)
+        "DMA0_MADR", // 0x1080 - Memory Address
+        "DMA0_BCR",  // 0x1084 - Block Control
+        "DMA0_CHCR", // 0x1088 - Channel Control
+        
+        // DMA Channel 1 (MDECout)
+        "DMA1_MADR", // 0x1090
+        "DMA1_BCR",  // 0x1094
+        "DMA1_CHCR", // 0x1098
+        
+        // DMA Channel 2 (GPU)
+        "DMA2_MADR", // 0x10a0
+        "DMA2_BCR",  // 0x10a4
+        "DMA2_CHCR", // 0x10a8
+        
+        // DMA Channel 3 (CDROM)
+        "DMA3_MADR", // 0x10b0
+        "DMA3_BCR",  // 0x10b4
+        "DMA3_CHCR", // 0x10b8
+        
+        // DMA Channel 4 (SPU)
+        "DMA4_MADR", // 0x10c0
+        "DMA4_BCR",  // 0x10c4
+        "DMA4_CHCR", // 0x10c8
+        
+        // DMA Channel 5 (PIO)
+        "DMA5_MADR", // 0x10d0
+        "DMA5_BCR",  // 0x10d4
+        "DMA5_CHCR", // 0x10d8
+        
+        // DMA Channel 6 (OTC)
+        "DMA6_MADR", // 0x10e0
+        "DMA6_BCR",  // 0x10e4
+        "DMA6_CHCR", // 0x10e8
+        
+        // Timers
+        "TIMER0_COUNT", // 0x1100
+        "TIMER0_MODE",  // 0x1104
+        "TIMER0_TARGET",// 0x1108
+        "TIMER1_COUNT", // 0x1110
+        "TIMER1_MODE",  // 0x1114
+        "TIMER1_TARGET",// 0x1118
+        "TIMER2_COUNT", // 0x1120
+        "TIMER2_MODE",  // 0x1124
+        "TIMER2_TARGET" // 0x1128
+    };
 }
 
 uint32_t MCPServer::ReadHardwareRegister(const std::string& register_name) {
-    // TODO: Implement actual hardware register read logic
-    // This will depend on how PCSX-Redux exposes its hardware registers
-    std::cout << "Reading hardware register: " << register_name << std::endl;
-    return 0xDEADBEEF; // Mock value
+    // Map register names to hardware offsets
+    static const std::unordered_map<std::string, uint16_t> register_map = {
+        {"I_STAT", 0x1070}, {"I_MASK", 0x1074},
+        {"DMA_DPCR", 0x10f0}, {"DMA_DICR", 0x10f4},
+        {"DMA0_MADR", 0x1080}, {"DMA0_BCR", 0x1084}, {"DMA0_CHCR", 0x1088},
+        {"DMA1_MADR", 0x1090}, {"DMA1_BCR", 0x1094}, {"DMA1_CHCR", 0x1098},
+        {"DMA2_MADR", 0x10a0}, {"DMA2_BCR", 0x10a4}, {"DMA2_CHCR", 0x10a8},
+        {"DMA3_MADR", 0x10b0}, {"DMA3_BCR", 0x10b4}, {"DMA3_CHCR", 0x10b8},
+        {"DMA4_MADR", 0x10c0}, {"DMA4_BCR", 0x10c4}, {"DMA4_CHCR", 0x10c8},
+        {"DMA5_MADR", 0x10d0}, {"DMA5_BCR", 0x10d4}, {"DMA5_CHCR", 0x10d8},
+        {"DMA6_MADR", 0x10e0}, {"DMA6_BCR", 0x10e4}, {"DMA6_CHCR", 0x10e8},
+        {"TIMER0_COUNT", 0x1100}, {"TIMER0_MODE", 0x1104}, {"TIMER0_TARGET", 0x1108},
+        {"TIMER1_COUNT", 0x1110}, {"TIMER1_MODE", 0x1114}, {"TIMER1_TARGET", 0x1118},
+        {"TIMER2_COUNT", 0x1120}, {"TIMER2_MODE", 0x1124}, {"TIMER2_TARGET", 0x1128}
+    };
+    
+    auto it = register_map.find(register_name);
+    if (it == register_map.end()) {
+        std::cout << "Unknown hardware register: " << register_name << std::endl;
+        return 0;
+    }
+    
+    // Read from emulator's hardware register buffer
+    uint16_t offset = it->second;
+    uint32_t *ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[offset]);
+    return *ptr;
 }
 
 bool MCPServer::WriteHardwareRegister(const std::string& register_name, uint32_t value) {
-    // TODO: Implement actual hardware register write logic
-    std::cout << "Writing 0x" << std::hex << value << std::dec << " to hardware register: " << register_name << std::endl;
-    return true; // Mock success
+    // Map register names to hardware offsets
+    static const std::unordered_map<std::string, uint16_t> register_map = {
+        {"I_STAT", 0x1070}, {"I_MASK", 0x1074},
+        {"DMA_DPCR", 0x10f0}, {"DMA_DICR", 0x10f4},
+        {"DMA0_MADR", 0x1080}, {"DMA0_BCR", 0x1084}, {"DMA0_CHCR", 0x1088},
+        {"DMA1_MADR", 0x1090}, {"DMA1_BCR", 0x1094}, {"DMA1_CHCR", 0x1098},
+        {"DMA2_MADR", 0x10a0}, {"DMA2_BCR", 0x10a4}, {"DMA2_CHCR", 0x10a8},
+        {"DMA3_MADR", 0x10b0}, {"DMA3_BCR", 0x10b4}, {"DMA3_CHCR", 0x10b8},
+        {"DMA4_MADR", 0x10c0}, {"DMA4_BCR", 0x10c4}, {"DMA4_CHCR", 0x10c8},
+        {"DMA5_MADR", 0x10d0}, {"DMA5_BCR", 0x10d4}, {"DMA5_CHCR", 0x10d8},
+        {"DMA6_MADR", 0x10e0}, {"DMA6_BCR", 0x10e4}, {"DMA6_CHCR", 0x10e8},
+        {"TIMER0_COUNT", 0x1100}, {"TIMER0_MODE", 0x1104}, {"TIMER0_TARGET", 0x1108},
+        {"TIMER1_COUNT", 0x1110}, {"TIMER1_MODE", 0x1114}, {"TIMER1_TARGET", 0x1118},
+        {"TIMER2_COUNT", 0x1120}, {"TIMER2_MODE", 0x1124}, {"TIMER2_TARGET", 0x1128}
+    };
+    
+    auto it = register_map.find(register_name);
+    if (it == register_map.end()) {
+        std::cout << "Unknown hardware register: " << register_name << std::endl;
+        return false;
+    }
+    
+    // Write to emulator's hardware register buffer
+    // WARNING: Direct writes may bypass emulator logic - use with caution!
+    uint16_t offset = it->second;
+    uint32_t *ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[offset]);
+    *ptr = value;
+    std::cout << "Wrote 0x" << std::hex << value << std::dec << " to " << register_name << std::endl;
+    return true;
 }
 
 MCPServer::HardwareState::DMAChannel MCPServer::GetDMAState(uint32_t channel) {
-    // TODO: Implement actual DMA state retrieval
-    if (channel >= 0 && channel < 8) {
-        return {0, 0, false, 0, 0}; // Mock value
+    if (channel >= 7) {
+        return {0, 0, false, 0, 0}; // Invalid channel
     }
-    return {};
+    
+    // Each DMA channel has 3 registers at offset 0x10 from each other
+    // Base is 0x1080, each channel offset by 0x10
+    uint16_t base_offset = 0x1080 + (channel * 0x10);
+    
+    // Read MADR (Memory Address Register) at offset +0
+    uint32_t *madr_ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[base_offset]);
+    uint32_t madr = *madr_ptr;
+    
+    // Read BCR (Block Control Register) at offset +4
+    uint32_t *bcr_ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[base_offset + 4]);
+    uint32_t bcr = *bcr_ptr;
+    
+    // Read CHCR (Channel Control Register) at offset +8
+    uint32_t *chcr_ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[base_offset + 8]);
+    uint32_t chcr = *chcr_ptr;
+    
+    // Extract values from registers
+    bool enabled = (chcr & 0x01000000) != 0; // Bit 24 indicates if DMA is active
+    uint32_t block_size = bcr >> 16;
+    uint32_t block_count = bcr & 0xFFFF;
+    
+    return {madr, bcr, enabled, block_size, block_count};
 }
 
 std::vector<std::string> MCPServer::GetCallChain(uint32_t max_depth) {
@@ -391,45 +514,182 @@ MCPServer::ToolResult MCPServer::ToolGetMemoryMap() {
 }
 
 MCPServer::ToolResult MCPServer::ToolGetMemoryRange(uint32_t address, uint32_t length) {
-    // TODO: Implement actual memory reading from emulator
-    std::vector<uint8_t> data(length, 0xCC); // Mock data
+    std::vector<uint8_t> data;
+    if (g_emulator && g_emulator->m_mem) {
+        data.reserve(length);
+        for (uint32_t i = 0; i < length; ++i) {
+            data.push_back(g_emulator->m_mem->read8(address + i));
+        }
+    } else {
+        return {false, "", "Emulator not initialized"};
+    }
+    
     nlohmann::json result_json;
     result_json["address"] = address;
     result_json["length"] = length;
-    result_json["data"] = data; // Will be base64 encoded by default in JSON
+    result_json["data"] = data;  // Will be base64 encoded by nlohmann::json
     return {true, result_json.dump(), ""};
 }
 
 MCPServer::ToolResult MCPServer::ToolFindString(const std::string& pattern, const std::string& region) {
-    // TODO: Implement actual string search
+    if (!g_emulator || !g_emulator->m_mem) {
+        return {false, "", "Emulator not initialized"};
+    }
+    
+    // Determine search region
+    uint32_t start_addr = 0;
+    uint32_t end_addr = 0;
+    
+    if (region == "ram") {
+        start_addr = 0x00000000;
+        end_addr = 0x00200000;  // 2MB RAM
+    } else if (region == "bios") {
+        start_addr = 0x1FC00000;
+        end_addr = 0x1FC80000;  // 512KB BIOS
+    } else {
+        start_addr = 0x00000000;
+        end_addr = 0x00200000;  // Default to RAM
+    }
+    
     nlohmann::json result_json;
     result_json["pattern"] = pattern;
     result_json["region"] = region;
     result_json["results"] = nlohmann::json::array();
-    result_json["results"].push_back({{"address", 0x80000400}, {"content", "Mock String"}});
+    
+    // Search for the pattern in memory
+    size_t pattern_len = pattern.length();
+    if (pattern_len == 0) {
+        return {true, result_json.dump(), ""};
+    }
+    
+    for (uint32_t addr = start_addr; addr <= end_addr - pattern_len; ++addr) {
+        bool match = true;
+        for (size_t i = 0; i < pattern_len; ++i) {
+            uint8_t byte = g_emulator->m_mem->read8(addr + i);
+            if (byte != static_cast<uint8_t>(pattern[i])) {
+                match = false;
+                break;
+            }
+        }
+        
+        if (match) {
+            // Read a bit more context
+            std::string context;
+            for (size_t i = 0; i < pattern_len + 16 && (addr + i) < end_addr; ++i) {
+                uint8_t byte = g_emulator->m_mem->read8(addr + i);
+                if (byte >= 32 && byte < 127) {
+                    context += static_cast<char>(byte);
+                } else if (byte == 0) {
+                    break;  // Null terminator
+                } else {
+                    context += '.';
+                }
+            }
+            
+            result_json["results"].push_back({
+                {"address", addr},
+                {"content", context}
+            });
+        }
+    }
+    
     return {true, result_json.dump(), ""};
 }
 
 MCPServer::ToolResult MCPServer::ToolSearchBytes(const std::string& pattern, const std::string& region) {
-    // TODO: Implement actual byte search
+    if (!g_emulator || !g_emulator->m_mem) {
+        return {false, "", "Emulator not initialized"};
+    }
+    
+    // Determine search region
+    uint32_t start_addr = 0;
+    uint32_t end_addr = 0;
+    
+    if (region == "ram") {
+        start_addr = 0x00000000;
+        end_addr = 0x00200000;  // 2MB RAM
+    } else if (region == "bios") {
+        start_addr = 0x1FC00000;
+        end_addr = 0x1FC80000;  // 512KB BIOS
+    } else {
+        start_addr = 0x00000000;
+        end_addr = 0x00200000;  // Default to RAM
+    }
+    
+    // Parse hex pattern (e.g., "0A 1B 2C" or "0a1b2c")
+    std::vector<uint8_t> search_bytes;
+    std::string clean_pattern;
+    for (char c : pattern) {
+        if (c != ' ' && c != '\t') {
+            clean_pattern += c;
+        }
+    }
+    
+    // Convert hex string to bytes
+    for (size_t i = 0; i < clean_pattern.length(); i += 2) {
+        if (i + 1 < clean_pattern.length()) {
+            std::string byte_str = clean_pattern.substr(i, 2);
+            try {
+                uint8_t byte = static_cast<uint8_t>(std::stoi(byte_str, nullptr, 16));
+                search_bytes.push_back(byte);
+            } catch (...) {
+                return {false, "", "Invalid hex pattern"};
+            }
+        }
+    }
+    
+    if (search_bytes.empty()) {
+        return {false, "", "Empty search pattern"};
+    }
+    
     nlohmann::json result_json;
     result_json["pattern"] = pattern;
     result_json["region"] = region;
     result_json["results"] = nlohmann::json::array();
-    result_json["results"].push_back({{"address", 0x80000500}, {"length", 4}});
+    
+    // Search for byte pattern in memory
+    size_t pattern_len = search_bytes.size();
+    for (uint32_t addr = start_addr; addr <= end_addr - pattern_len; ++addr) {
+        bool match = true;
+        for (size_t i = 0; i < pattern_len; ++i) {
+            uint8_t byte = g_emulator->m_mem->read8(addr + i);
+            if (byte != search_bytes[i]) {
+                match = false;
+                break;
+            }
+        }
+        
+        if (match) {
+            result_json["results"].push_back({
+                {"address", addr},
+                {"length", pattern_len}
+            });
+        }
+    }
+    
     return {true, result_json.dump(), ""};
 }
 
 MCPServer::ToolResult MCPServer::ToolHexdump(uint32_t address, uint32_t length) {
-    // TODO: Implement actual hexdump from emulator memory
-    std::string hex_str;
-    for (uint32_t i = 0; i < length; ++i) {
-        hex_str += "CC "; // Mock hex
+    if (!g_emulator || !g_emulator->m_mem) {
+        return {false, "", "Emulator not initialized"};
     }
+    
+    std::stringstream hex_str;
+    hex_str << std::hex << std::setfill('0');
+    
+    for (uint32_t i = 0; i < length; ++i) {
+        if (i > 0 && i % 16 == 0) {
+            hex_str << "\n";
+        }
+        uint8_t byte = g_emulator->m_mem->read8(address + i);
+        hex_str << std::setw(2) << static_cast<int>(byte) << " ";
+    }
+    
     nlohmann::json result_json;
     result_json["address"] = address;
     result_json["length"] = length;
-    result_json["hexdump"] = hex_str;
+    result_json["hexdump"] = hex_str.str();
     return {true, result_json.dump(), ""};
 }
 
