@@ -54,6 +54,30 @@ MCPServer::Config MCPServer::config_;
 std::unordered_map<uint32_t, MCPServer::Breakpoint> MCPServer::breakpoints_;
 std::unordered_map<std::string, MCPServer::Tool> MCPServer::tools_;
 
+void MCPServer::RegisterToolsIfNeeded() {
+    if (!tools_.empty()) {
+        return;
+    }
+    tools_["get_cpu_state"] = {"get_cpu_state", "Get current CPU state"};
+    tools_["get_memory_map"] = {"get_memory_map", "Get the PSX memory map"};
+    tools_["get_memory_range"] = {"get_memory_range", "Get a range of memory (address, length)"};
+    tools_["hexdump"] = {"hexdump", "Get a hex dump of memory region"};
+    tools_["find_string"] = {"find_string", "Search for strings in memory"};
+    tools_["search_bytes"] = {"search_bytes", "Search for byte patterns in memory"};
+    tools_["get_gpu_state"] = {"get_gpu_state", "Get current GPU state"};
+    tools_["list_gpu_commands"] = {"list_gpu_commands", "List current GPU command queue"};
+    tools_["list_hardware_registers"] = {"list_hardware_registers", "List all available hardware registers"};
+    tools_["read_hardware_register"] = {"read_hardware_register", "Read a specific hardware register value"};
+    tools_["write_hardware_register"] = {"write_hardware_register", "Write a value to a hardware register"};
+    tools_["get_dma_state"] = {"get_dma_state", "Get current DMA channel states"};
+    tools_["set_breakpoint"] = {"set_breakpoint", "Set a breakpoint at the given address"};
+    tools_["get_breakpoints"] = {"get_breakpoints", "List all active breakpoints"};
+    tools_["clear_breakpoint"] = {"clear_breakpoint", "Clear a breakpoint at the given address"};
+    tools_["get_call_chain"] = {"get_call_chain", "Trace the call chain from the current instruction"};
+    tools_["get_call_graph"] = {"get_call_graph", "Get function call graph for a specific function"};
+    tools_["get_emulator_state"] = {"get_emulator_state", "Get comprehensive emulator state"};
+}
+
 // Helper function to send data over socket
 static void SendData(int socket, const std::string& data) {
     // Add length prefix to the data (4 bytes, network byte order)
@@ -179,26 +203,7 @@ bool MCPServer::Initialize(const Config& config) {
     }
     config_ = config;
     running_ = true;
-
-    // Register tools
-    tools_["get_cpu_state"] = {"get_cpu_state", "Get current CPU state"};
-    tools_["get_memory_map"] = {"get_memory_map", "Get the PSX memory map"};
-    tools_["get_memory_range"] = {"get_memory_range", "Get a range of memory (address, length)"};
-    tools_["hexdump"] = {"hexdump", "Get a hex dump of memory region"};
-    tools_["find_string"] = {"find_string", "Search for strings in memory"};
-    tools_["search_bytes"] = {"search_bytes", "Search for byte patterns in memory"};
-    tools_["get_gpu_state"] = {"get_gpu_state", "Get current GPU state"};
-    tools_["list_gpu_commands"] = {"list_gpu_commands", "List current GPU command queue"};
-    tools_["list_hardware_registers"] = {"list_hardware_registers", "List all available hardware registers"};
-    tools_["read_hardware_register"] = {"read_hardware_register", "Read a specific hardware register value"};
-    tools_["write_hardware_register"] = {"write_hardware_register", "Write a value to a hardware register"};
-    tools_["get_dma_state"] = {"get_dma_state", "Get current DMA channel states"};
-    tools_["set_breakpoint"] = {"set_breakpoint", "Set a breakpoint at the given address"};
-    tools_["get_breakpoints"] = {"get_breakpoints", "List all active breakpoints"};
-    tools_["clear_breakpoint"] = {"clear_breakpoint", "Clear a breakpoint at the given address"};
-    tools_["get_call_chain"] = {"get_call_chain", "Trace the call chain from the current instruction"};
-    tools_["get_call_graph"] = {"get_call_graph", "Get function call graph for a specific function"};
-    tools_["get_emulator_state"] = {"get_emulator_state", "Get comprehensive emulator state"};
+    RegisterToolsIfNeeded();
 
     return true;
 }
@@ -240,6 +245,7 @@ bool MCPServer::IsRunning() {
 }
 
 std::vector<MCPServer::Tool> MCPServer::ListTools() {
+    RegisterToolsIfNeeded();
     std::vector<Tool> tool_list;
     for (const auto& pair : tools_) {
         tool_list.push_back(pair.second);
@@ -248,6 +254,7 @@ std::vector<MCPServer::Tool> MCPServer::ListTools() {
 }
 
 MCPServer::ToolResult MCPServer::ExecuteTool(const std::string& tool_name, const std::string& arguments_json) {
+    RegisterToolsIfNeeded();
     try {
         nlohmann::json args = nlohmann::json::parse(arguments_json);
 
@@ -486,9 +493,60 @@ std::string MCPServer::HandleMCPRequest(const std::string& request_str) {
         nlohmann::json params = request_json.value("params", nlohmann::json::object());
 
         response_json["jsonrpc"] = "2.0";
-        response_json["id"] = request_json.value("id", nullptr);
+        if (request_json.contains("id")) {
+            response_json["id"] = request_json["id"];
+        } else {
+            response_json["id"] = nullptr;
+        }
 
-        if (method == "mcp_list_tools") {
+        if (method == "initialize") {
+            // Standard MCP initialize method
+            response_json["result"] = {
+                {"protocolVersion", "2024-11-05"},
+                {"capabilities", {
+                    {"tools", nlohmann::json::object()}
+                }},
+                {"serverInfo", {
+                    {"name", "PCSX-Redux MCP Server"},
+                    {"version", "1.0.0"}
+                }}
+            };
+        } else if (method == "tools/list") {
+            // Standard MCP tools/list method
+            nlohmann::json tools_array = nlohmann::json::array();
+            for (const auto& tool : ListTools()) {
+                tools_array.push_back({
+                    {"name", tool.name},
+                    {"description", tool.description},
+                    {"inputSchema", {
+                        {"type", "object"},
+                        {"properties", nlohmann::json::object()}
+                    }}
+                });
+            }
+            response_json["result"] = {{"tools", tools_array}};
+        } else if (method == "tools/call") {
+            // Standard MCP tools/call method
+            std::string tool_name = params.at("name").get<std::string>();
+            nlohmann::json args_json = params.value("arguments", nlohmann::json::object());
+            ToolResult result = ExecuteTool(tool_name, args_json.dump());
+            if (result.success) {
+                response_json["result"] = {
+                    {"content", nlohmann::json::array({
+                        {
+                            {"type", "text"},
+                            {"text", result.content}
+                        }
+                    })}
+                };
+            } else {
+                response_json["error"] = {
+                    {"code", -32000},
+                    {"message", result.error}
+                };
+            }
+        } else if (method == "mcp_list_tools") {
+            // Legacy compatibility: custom mcp_list_tools method
             nlohmann::json tools_array = nlohmann::json::array();
             for (const auto& tool : ListTools()) {
                 tools_array.push_back({
@@ -498,6 +556,7 @@ std::string MCPServer::HandleMCPRequest(const std::string& request_str) {
             }
             response_json["result"] = tools_array;
         } else if (method == "mcp_call_tool") {
+            // Legacy compatibility: custom mcp_call_tool method
             std::string tool_name = params.at("name").get<std::string>();
             nlohmann::json args_json = params.at("arguments");
             ToolResult result = ExecuteTool(tool_name, args_json.dump());

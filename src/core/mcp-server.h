@@ -332,6 +332,8 @@ class MCPServer {
     static std::string SerializeState(const MemoryState& state);
     static std::string SerializeState(const GPUState& state);
     static std::string SerializeState(const HardwareState& state);
+
+    static void RegisterToolsIfNeeded();
 };
 
 }  // namespace PCSX
