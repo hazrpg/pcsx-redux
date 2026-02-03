@@ -22,7 +22,9 @@
 #include <llhttp.h>
 #include <multipart_parser.h>
 
+#include <algorithm>
 #include <charconv>
+#include <cctype>
 #include <magic_enum_all.hpp>
 #include <map>
 #include <memory>
@@ -45,8 +47,40 @@
 #include "support/strings-helpers.h"
 #include "supportpsx/iso9660-builder.h"
 #include "uriparser/Uri.h"
+#include "core/mcp-server.h"
+
+using nlohmann::json;
 
 namespace {
+
+bool WantsSSE(const PCSX::RequestData& request) {
+    auto isEventStreamHeader = [](const std::string& value) {
+        std::string lowered = value;
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        return lowered.find("text/event-stream") != std::string::npos;
+    };
+    for (const auto& header : request.headers) {
+        if (PCSX::StringsHelpers::strcasecmp(header.first, "Accept")) {
+            if (isEventStreamHeader(header.second)) {
+                return true;
+            }
+        }
+    }
+    if (!request.urlData.query.empty()) {
+        std::string loweredQuery = request.urlData.query;
+        std::transform(loweredQuery.begin(), loweredQuery.end(), loweredQuery.begin(), [](unsigned char c) {
+            return static_cast<char>(std::tolower(c));
+        });
+        if ((loweredQuery.find("transport=sse") != std::string::npos) ||
+            (loweredQuery.find("stream=sse") != std::string::npos) ||
+            (loweredQuery.find("sse=true") != std::string::npos)) {
+            return true;
+        }
+    }
+    return false;
+}
 
 class VramExecutor : public PCSX::WebExecutor {
     virtual bool match(PCSX::WebClient* client, const PCSX::UrlData& urldata) final {
@@ -765,6 +799,59 @@ class ScreenExecutor : public PCSX::WebExecutor {
     virtual ~ScreenExecutor() = default;
 };
 
+class MCPExecutor : public PCSX::WebExecutor {
+    virtual bool match(PCSX::WebClient* client, const PCSX::UrlData& urldata) final {
+        return urldata.path == "/mcp";
+    }
+    virtual bool execute(PCSX::WebClient* client, PCSX::RequestData& request) final {
+        if (request.method == PCSX::RequestData::Method::HTTP_POST) {
+            try {
+                std::string response_str = PCSX::MCPServer::HandleMCPRequest(request.body.asString());
+                client->write("HTTP/1.1 200 OK\r\n"
+                            "Content-Type: application/json\r\n"
+                            "Content-Length: " + std::to_string(response_str.size()) + "\r\n\r\n" + response_str);
+            } catch (const json::parse_error& e) {
+                json error_response = {
+                    {"jsonrpc", "2.0"},
+                    {"id", nullptr},
+                    {"error", {
+                        {"code", -32700},
+                        {"message", "Parse error: " + std::string(e.what())}
+                    }}
+                };
+                write200(client, error_response);
+            }
+            return true;
+        } else if (request.method == PCSX::RequestData::Method::HTTP_OPTIONS) {
+            client->write("HTTP/1.1 204 No Content\r\n"
+                        "Access-Control-Allow-Origin: *\r\n"
+                        "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
+                        "Access-Control-Allow-Headers: Content-Type\r\n"
+                        "Access-Control-Max-Age: 86400\r\n\r\n");
+            return true;
+        } else if (request.method == PCSX::RequestData::Method::HTTP_HTTP_GET) {
+            if (WantsSSE(request)) {
+                request.keepAlive = true;
+                client->write("HTTP/1.1 200 OK\r\n"
+                              "Content-Type: text/event-stream\r\n"
+                              "Cache-Control: no-cache\r\n"
+                              "Connection: keep-alive\r\n"
+                              "Access-Control-Allow-Origin: *\r\n\r\n");
+                client->write("event: ping\r\n"
+                              "data: {}\r\n\r\n");
+            } else {
+                client->write("HTTP/1.1 405 Method Not Allowed\r\nAllow: POST, OPTIONS\r\n\r\n");
+            }
+            return true;
+        }
+        return false;
+    }
+
+  public:
+    MCPExecutor() = default;
+    virtual ~MCPExecutor() = default;
+};
+
 }  // namespace
 
 std::multimap<std::string, std::optional<std::string>> PCSX::WebExecutor::parseQuery(std::string_view query) {
@@ -805,6 +892,7 @@ PCSX::WebServer::WebServer() : m_listener(g_system->m_eventBus) {
     m_executors.push_back(new CDExecutor());
     m_executors.push_back(new StateExecutor());
     m_executors.push_back(new ScreenExecutor());
+    m_executors.push_back(new MCPExecutor());
     m_listener.listen<Events::SettingsLoaded>([this](const auto& event) {
         auto& debugSettings = g_emulator->settings.get<Emulator::SettingDebugSettings>();
         if (debugSettings.get<Emulator::DebugSettings::WebServer>() && (m_serverStatus != SERVER_STARTED)) {
@@ -964,7 +1052,10 @@ struct PCSX::WebClient::WebClientImpl {
     }
 
     void onUpgrade() {}
-    int onMessageBegin() { return 0; }
+    int onMessageBegin() {
+        m_requestData = RequestData();
+        return 0;
+    }
     int onUrl(const Slice& slice) {
         UriUriA uri;
         std::string urlString = slice.asString();
@@ -986,8 +1077,6 @@ struct PCSX::WebClient::WebClientImpl {
         m_requestData.urlData.userInfo =
             uri.userInfo.first ? std::string(uri.userInfo.first, uri.userInfo.afterLast) : "";
         uriFreeUriMembersA(&uri);
-        g_system->log(LogClass::WEBSERVER, "Received web api request, path: %s, query: %s\n",
-                      m_requestData.urlData.path.c_str(), m_requestData.urlData.query.c_str());
         return findExecutor() ? 0 : 1;
     }
     int onStatus(const Slice& slice) { return 0; }
@@ -1177,8 +1266,16 @@ struct PCSX::WebClient::WebClientImpl {
     }
     int executeRequest() {
         m_requestData.method = static_cast<RequestData::Method>(m_httpParser.method);
+        if (m_requestData.method != RequestData::Method::HTTP_OPTIONS) {
+            auto methodName = magic_enum::enum_name(m_requestData.method);
+            g_system->log(LogClass::WEBSERVER, "Received web api request (%.*s), path: %s, query: %s\n",
+                          int(methodName.size()), methodName.data(), m_requestData.urlData.path.c_str(),
+                          m_requestData.urlData.query.c_str());
+        }
         m_currentExecutor->execute(m_parent, m_requestData);
-        scheduleClose();
+        if (!m_requestData.keepAlive) {
+            scheduleClose();
+        }
         return 0;
     }
     void scheduleClose() {
