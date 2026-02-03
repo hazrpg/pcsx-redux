@@ -151,19 +151,18 @@ int PCSX::Emulator::init() {
     // MCP Server Integration
     auto& debugSettings = settings.get<SettingDebugSettings>();
     if (debugSettings.get<PCSX::Emulator::DebugSettings::MCPServer>()) {
-        MCPServer::Config mcp_config;
-        mcp_config.port = debugSettings.get<PCSX::Emulator::DebugSettings::MCPServerPort>();
-        // host is "127.0.0.1" by default
-
-        if (MCPServer::Initialize(mcp_config)) {
-            if (MCPServer::Start()) {
-                std::cout << "MCP Server started on port " << mcp_config.port << std::endl;
-            } else {
-                std::cerr << "Failed to start MCP Server!" << std::endl;
-            }
-        } else {
-            std::cerr << "Failed to initialize MCP Server!" << std::endl;
+        // Enable WebServer automatically when MCP is enabled
+        // The MCP endpoint is served via WebServer at /mcp
+        if (!debugSettings.get<PCSX::Emulator::DebugSettings::WebServer>()) {
+            debugSettings.get<PCSX::Emulator::DebugSettings::WebServer>().value = true;
         }
+        // Use MCP server port for WebServer
+        debugSettings.get<PCSX::Emulator::DebugSettings::WebServerPort>().value = 
+            debugSettings.get<PCSX::Emulator::DebugSettings::MCPServerPort>().value;
+        
+        std::cout << "MCP Server endpoint will be available at http://localhost:" 
+                  << debugSettings.get<PCSX::Emulator::DebugSettings::MCPServerPort>().value 
+                  << "/mcp" << std::endl;
     }
 
     const auto& args = g_system->getArgs();
