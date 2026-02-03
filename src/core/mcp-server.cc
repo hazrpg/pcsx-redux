@@ -359,29 +359,6 @@ std::string MCPServer::HandleMCPRequest(const std::string& request_str) {
                     {"message", result.error}
                 };
             }
-        } else if (method == "mcp_list_tools") {
-            // Legacy compatibility: custom mcp_list_tools method
-            nlohmann::json tools_array = nlohmann::json::array();
-            for (const auto& tool : ListTools()) {
-                tools_array.push_back({
-                    {"name", tool.name},
-                    {"description", tool.description}
-                });
-            }
-            response_json["result"] = tools_array;
-        } else if (method == "mcp_call_tool") {
-            // Legacy compatibility: custom mcp_call_tool method
-            std::string tool_name = params.at("name").get<std::string>();
-            nlohmann::json args_json = params.at("arguments");
-            ToolResult result = ExecuteTool(tool_name, args_json.dump());
-            if (result.success) {
-                response_json["result"] = nlohmann::json::parse(result.content);
-            } else {
-                response_json["error"] = {
-                    {"code", -32000},
-                    {"message", result.error}
-                };
-            }
         } else {
             response_json["error"] = {
                 {"code", -32601},
