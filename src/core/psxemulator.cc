@@ -18,6 +18,9 @@
  ***************************************************************************/
 
 #include "core/psxemulator.h"
+#include "core/mcp-server.h" // Added for MCP Server integration
+
+#include <iostream> // Added for MCP server logging
 
 #include "core/callstacks.h"
 #include "core/cdrom.h"
@@ -137,12 +140,31 @@ void PCSX::Emulator::setLua() {
 PCSX::Emulator::~Emulator() {
     // TODO: move Lua to g_system.
     m_lua->close();
+    MCPServer::Stop(); // Stop MCP Server
 }
 
 int PCSX::Emulator::init() {
     assert(g_system);
     if (m_mem->init() == -1) return -1;
     int ret = R3000Acpu::psxInit();
+
+    // MCP Server Integration
+    auto& debugSettings = settings.get<SettingDebugSettings>();
+    if (debugSettings.get<PCSX::Emulator::DebugSettings::MCPServer>()) {
+        MCPServer::Config mcp_config;
+        mcp_config.port = debugSettings.get<PCSX::Emulator::DebugSettings::MCPServerPort>();
+        // host is "127.0.0.1" by default
+
+        if (MCPServer::Initialize(mcp_config)) {
+            if (MCPServer::Start()) {
+                std::cout << "MCP Server started on port " << mcp_config.port << std::endl;
+            } else {
+                std::cerr << "Failed to start MCP Server!" << std::endl;
+            }
+        } else {
+            std::cerr << "Failed to initialize MCP Server!" << std::endl;
+        }
+    }
 
     const auto& args = g_system->getArgs();
 

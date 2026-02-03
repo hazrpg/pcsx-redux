@@ -2232,6 +2232,22 @@ query using a REST api. See the wiki for details.
 The debugger might be required in some cases.)"));
         changed |=
             ImGui::InputInt(_("Web Server Port"), &debugSettings.get<Emulator::DebugSettings::WebServerPort>().value);
+        if (ImGui::Checkbox(_("Enable MCP Server"), &debugSettings.get<Emulator::DebugSettings::MCPServer>().value)) {
+            changed = true;
+            if (debugSettings.get<Emulator::DebugSettings::MCPServer>()) {
+                // MCP server is started in Emulator::init()
+                // No explicit start here as it's handled on emulator initialization
+            } else {
+                // MCP server is stopped in Emulator::~Emulator()
+                // No explicit stop here, as it's handled on emulator shutdown
+            }
+        }
+        ImGuiHelpers::ShowHelpMarker(_(R"(This will activate the Model Context Protocol (MCP) server,
+that allows external AI tools (like GhidrAssistMCP) to query
+and interact with the emulator's state in real-time.
+See the wiki for details.)"));
+        changed |=
+            ImGui::InputInt(_("MCP Server Port"), &debugSettings.get<Emulator::DebugSettings::MCPServerPort>().value);
         if (ImGui::Checkbox(_("Enable SIO1 Server"), &debugSettings.get<Emulator::DebugSettings::SIO1Server>().value)) {
             changed = true;
             if (debugSettings.get<Emulator::DebugSettings::SIO1Server>()) {
