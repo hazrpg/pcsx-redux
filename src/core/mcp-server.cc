@@ -23,6 +23,7 @@
 #include <string>
 #include <vector>
 #include <unordered_map>
+#include <set>
 #include <stdexcept>
 #include <iomanip>
 #include <sstream>
@@ -32,6 +33,7 @@
 #include "cdrom/cdriso.h"
 #include "core/debug.h"
 #include "core/gpulogger.h"
+#include "core/callstacks.h"
 
 namespace PCSX {
 
@@ -171,14 +173,67 @@ MCPServer::CPUState MCPServer::GetCPUState() {
 
 MCPServer::MemoryState MCPServer::GetMemoryState() {
     MemoryState state = {};
-    // Mock memory regions for now
-    state.regions["ram"] = {MemoryRegion::Type::RAM, 0x00100000, 0x001FFFFF, "1 MB"};
-    state.regions["vram"] = {MemoryRegion::Type::VRAM, 0x1F800000, 0x1F9FFFFF, "2 MB"};
-    state.regions["rom"] = {MemoryRegion::Type::ROM, 0x80000000, 0x803FFFFF, "4 MB"};
-    state.regions["hardware"] = {MemoryRegion::Type::HW, 0x1F000000, 0x1F0000FF, "256 B"};
-
-    // TODO: Populate actual memory contents if needed, e.g., for hexdump tools
-    // This will be large, consider only fetching on demand or by range
+    
+    if (!g_emulator || !g_emulator->m_mem) {
+        // Return static info if emulator not initialized
+        state.regions["ram"] = {MemoryRegion::Type::RAM, 0x00000000, 0x00200000, "2 MB"};
+        state.regions["vram"] = {MemoryRegion::Type::VRAM, 0x1F800000, 0x1F9FFFFF, "2 MB"};
+        state.regions["bios"] = {MemoryRegion::Type::ROM, 0x1FC00000, 0x1FC80000, "512 KB"};
+        state.regions["rom"] = {MemoryRegion::Type::ROM, 0x80000000, 0x803FFFFF, "4 MB"};
+        state.regions["hardware"] = {MemoryRegion::Type::HW, 0x1F000000, 0x1F0000FF, "256 B"};
+        return state;
+    }
+    
+    // Get current PC to determine active memory region
+    uint32_t pc = g_emulator->m_cpu->m_regs.pc;
+    std::string active_region = "unknown";
+    
+    // Define all memory regions with dynamic info
+    state.regions["ram"] = {MemoryRegion::Type::RAM, 0x00000000, 0x00200000, "2 MB"};
+    state.regions["scratchpad"] = {MemoryRegion::Type::RAM, 0x1F800000, 0x1F800400, "1 KB"};
+    state.regions["hardware_regs"] = {MemoryRegion::Type::HW, 0x1F000000, 0x1F010000, "64 KB"};
+    state.regions["bios"] = {MemoryRegion::Type::ROM, 0x1FC00000, 0x1FC80000, "512 KB"};
+    state.regions["exp1"] = {MemoryRegion::Type::ROM, 0x1F000000, 0x1F100000, "1 MB"};
+    state.regions["exp2"] = {MemoryRegion::Type::ROM, 0x1F100000, 0x1F200000, "1 MB"};
+    state.regions["exp3"] = {MemoryRegion::Type::ROM, 0x1FA00000, 0x1FB00000, "1 MB"};
+    state.regions["memory_ctrl"] = {MemoryRegion::Type::HW, 0x1F801000, 0x1F801024, "36 B"};
+    state.regions["interrupt_ctrl"] = {MemoryRegion::Type::HW, 0x1F801070, 0x1F801078, "8 B"};
+    state.regions["dma_regs"] = {MemoryRegion::Type::HW, 0x1F801080, 0x1F8010F8, "120 B"};
+    state.regions["timer_regs"] = {MemoryRegion::Type::HW, 0x1F801100, 0x1F801130, "48 B"};
+    state.regions["gpu_regs"] = {MemoryRegion::Type::HW, 0x1F801810, 0x1F801818, "8 B"};
+    
+    // Determine active region based on PC
+    if (pc >= 0x00000000 && pc < 0x00200000) {
+        active_region = "ram";
+    } else if (pc >= 0x1F800000 && pc < 0x1F800400) {
+        active_region = "scratchpad";
+    } else if (pc >= 0x1FC00000 && pc < 0x1FC80000) {
+        active_region = "bios";
+    } else if (pc >= 0x80000000 && pc < 0x80200000) {
+        active_region = "ram (KSEG0)";
+    } else if (pc >= 0xA0000000 && pc < 0xA0200000) {
+        active_region = "ram (KSEG1)";
+    } else if (pc >= 0x1F000000 && pc < 0x1F100000) {
+        active_region = "exp1";
+    } else if (pc >= 0xBFC00000 && pc < 0xBFC80000) {
+        active_region = "bios (KSEG1)";
+    } else if (pc >= 0x1F801000 && pc < 0x1F802000) {
+        active_region = "hardware_regs";
+    }
+    
+    // Add dynamic memory usage info
+    state.regions["active_pc"] = {MemoryRegion::Type::RAM, pc, pc, active_region};
+    
+    // Check for RAM initialization by sampling first KB
+    int non_zero_count = 0;
+    for (uint32_t i = 0; i < 256; i++) {
+        if (g_emulator->m_mem->read32(i * 4) != 0) {
+            non_zero_count++;
+        }
+    }
+    std::string ram_usage = (non_zero_count > 0) ? "Initialized" : "Uninitialized";
+    state.regions["ram_status"] = {MemoryRegion::Type::RAM, 0, (uint32_t)non_zero_count, ram_usage};
+    
     return state;
 }
 
@@ -465,19 +520,151 @@ MCPServer::HardwareState::DMAChannel MCPServer::GetDMAState(uint32_t channel) {
 }
 
 std::vector<std::string> MCPServer::GetCallChain(uint32_t max_depth) {
-    // TODO: Implement call chain tracing using PCSX-Redux's internal callstack or debugger
     std::vector<std::string> chain;
-    chain.push_back("0x80010000 - main (mock)");
-    chain.push_back("0x80010100 - game_loop (mock)");
+    
+    if (!g_emulator || !g_emulator->m_callStacks) {
+        chain.push_back("Error: Emulator or CallStacks not initialized");
+        return chain;
+    }
+    
+    // Check if we have a current call stack
+    if (!g_emulator->m_callStacks->hasCurrent()) {
+        // No call stack available yet - return current PC as the only entry
+        uint32_t pc = g_emulator->m_cpu->m_regs.pc;
+        uint32_t ra = g_emulator->m_cpu->m_regs.GPR.r[31];  // Return address (ra/$31)
+        
+        std::stringstream ss;
+        ss << "0x" << std::hex << std::setfill('0') << std::setw(8) << pc 
+           << " - current instruction (no call stack yet)";
+        chain.push_back(ss.str());
+        
+        if (ra != 0 && ra != 0xFFFFFFFF) {
+            std::stringstream ss_ra;
+            ss_ra << "0x" << std::hex << std::setfill('0') << std::setw(8) << ra 
+                  << " - return address (ra/$31)";
+            chain.push_back(ss_ra.str());
+        }
+        
+        return chain;
+    }
+    
+    // Get the current call stack
+    const auto& callStack = g_emulator->m_callStacks->getCurrent();
+    
+    // Add current PC at top of stack
+    uint32_t pc = g_emulator->m_cpu->m_regs.pc;
+    std::stringstream ss_pc;
+    ss_pc << "0x" << std::hex << std::setfill('0') << std::setw(8) << pc 
+          << " - current instruction (SP: 0x" << callStack.ra << ")";
+    chain.push_back(ss_pc.str());
+    
+    // Iterate through the call stack
+    uint32_t depth = 0;
+    for (const auto& call : callStack.calls) {
+        if (depth >= max_depth) {
+            chain.push_back("... (truncated at depth " + std::to_string(max_depth) + ")");
+            break;
+        }
+        
+        std::stringstream ss;
+        ss << "0x" << std::hex << std::setfill('0') << std::setw(8) << call.ra;
+        
+        if (call.shadow) {
+            ss << " - function (shadow stack)";
+        } else {
+            ss << " - function (FP: 0x" << std::hex << call.fp << ", SP: 0x" << call.sp << ")";
+        }
+        
+        chain.push_back(ss.str());
+        depth++;
+    }
+    
     return chain;
 }
 
 std::vector<std::string> MCPServer::GetCallGraph(const std::string& function_name, uint32_t depth) {
-    // TODO: Implement call graph analysis. This is complex and might involve
-    // static analysis of the emulated binary or dynamic analysis during execution.
     std::vector<std::string> graph;
-    graph.push_back(function_name + " callers: [mock_caller_1, mock_caller_2]");
-    graph.push_back(function_name + " callees: [mock_callee_1, mock_callee_2]");
+    
+    if (!g_emulator || !g_emulator->m_callStacks) {
+        graph.push_back("Error: Emulator or CallStacks not initialized");
+        return graph;
+    }
+    
+    // Build dynamic call graph from available call stacks
+    std::set<uint32_t> callers;
+    std::set<uint32_t> callees;
+    uint32_t target_addr = 0;
+    
+    // Try to parse function address from function_name if it's a hex string
+    try {
+        if (function_name.substr(0, 2) == "0x") {
+            target_addr = std::stoul(function_name, nullptr, 16);
+        }
+    } catch (...) {
+        // Use current PC if function name isn't an address
+        if (g_emulator && g_emulator->m_cpu) {
+            target_addr = g_emulator->m_cpu->m_regs.pc;
+        }
+    }
+    
+    // Get all call stacks from the tree
+    const auto& callstacks = g_emulator->m_callStacks->getCallstacks();
+    
+    // Analyze each call stack
+    for (const auto& stack : callstacks) {
+        uint32_t prev_ra = stack.ra;
+        
+        for (const auto& call : stack.calls) {
+            // If this call's return address matches our target, this function called our target
+            if (call.ra == target_addr) {
+                callers.insert(prev_ra);
+            }
+            
+            // If the previous call's return address matches our target, this is a callee
+            if (prev_ra == target_addr && call.ra != target_addr) {
+                callees.insert(call.ra);
+            }
+            
+            prev_ra = call.ra;
+            
+            if (callers.size() >= depth && callees.size() >= depth) {
+                break;
+            }
+        }
+        
+        if (callers.size() >= depth && callees.size() >= depth) {
+            break;
+        }
+    }
+    
+    // Format the results
+    std::stringstream ss_callers;
+    ss_callers << function_name << " callers: [";
+    bool first = true;
+    for (uint32_t addr : callers) {
+        if (!first) ss_callers << ", ";
+        ss_callers << "0x" << std::hex << std::setfill('0') << std::setw(8) << addr;
+        first = false;
+    }
+    ss_callers << "]";
+    graph.push_back(ss_callers.str());
+    
+    std::stringstream ss_callees;
+    ss_callees << function_name << " callees: [";
+    first = true;
+    for (uint32_t addr : callees) {
+        if (!first) ss_callees << ", ";
+        ss_callees << "0x" << std::hex << std::setfill('0') << std::setw(8) << addr;
+        first = false;
+    }
+    ss_callees << "]";
+    graph.push_back(ss_callees.str());
+    
+    // Add note about dynamic analysis
+    if (callers.empty() && callees.empty()) {
+        graph.push_back("Note: No call relationships detected yet. Run emulation to collect dynamic profiling data.");
+    }
+    
     return graph;
 }
 
