@@ -28,6 +28,7 @@
 #include "third_party/json.hpp"
 #include "core/cdrom.h"
 #include "cdrom/cdriso.h"
+#include "core/debug.h"
 
 namespace PCSX {
 
@@ -216,28 +217,99 @@ MCPServer::HardwareState MCPServer::GetHardwareState() {
 
 std::vector<MCPServer::Breakpoint> MCPServer::GetBreakpoints() {
     std::vector<Breakpoint> list;
+    
+    // First add our locally tracked breakpoints
     for (const auto& pair : breakpoints_) {
         list.push_back(pair.second);
     }
+    
+    // Then add breakpoints from the emulator's debug system
+    if (g_emulator && g_emulator->m_debug) {
+        const auto& tree = g_emulator->m_debug->getTree();
+        for (const auto& bp : tree) {
+            // Only add if not already in our list
+            uint32_t addr = bp.address() | bp.base();
+            if (breakpoints_.find(addr) == breakpoints_.end()) {
+                std::string type_str = "exec";
+                switch (bp.type()) {
+                    case Debug::BreakpointType::Exec: type_str = "exec"; break;
+                    case Debug::BreakpointType::Read: type_str = "read"; break;
+                    case Debug::BreakpointType::Write: type_str = "write"; break;
+                }
+                std::string label = bp.label();
+                list.push_back({addr, type_str, false, bp.enabled()});
+            }
+        }
+    }
+    
     return list;
 }
 
 bool MCPServer::SetBreakpoint(uint32_t address, const std::string& condition) {
-    // TODO: Integrate with PCSX-Redux's actual breakpoint mechanism
-    // For now, just store them internally
-    breakpoints_[address] = {address, condition, false, true};
-    std::cout << "Set breakpoint at 0x" << std::hex << address << std::dec << " with condition: " << condition << std::endl;
-    return true;
+    if (!g_emulator || !g_emulator->m_debug) {
+        std::cout << "Cannot set breakpoint: emulator or debug not initialized" << std::endl;
+        return false;
+    }
+    
+    // Normalize address (remove region bits)
+    uint32_t base = address & 0xe0000000;
+    uint32_t normalized = address & ~0xe0000000;
+    
+    // Create invoker that logs and pauses
+    Debug::BreakpointInvoker invoker = [](const Debug::Breakpoint* self, uint32_t addr, unsigned width, const char* cause) {
+        std::cout << "[MCP] Breakpoint hit at 0x" << std::hex << addr << std::dec << ": " << cause << std::endl;
+        g_system->pause();
+        return true;
+    };
+    
+    // Add the breakpoint (4 bytes width for instruction)
+    Debug::Breakpoint* bp = g_emulator->m_debug->addBreakpoint(
+        address, 
+        Debug::BreakpointType::Exec, 
+        4, 
+        "MCP Breakpoint", 
+        invoker
+    );
+    
+    if (bp) {
+        bp->label("MCP_" + std::to_string(address));
+        std::cout << "Set breakpoint at 0x" << std::hex << address << std::dec << std::endl;
+        
+        // Also track in our local storage for MCP management
+        breakpoints_[address] = {address, condition, false, true};
+        return true;
+    }
+    
+    return false;
 }
 
 bool MCPServer::ClearBreakpoint(uint32_t address) {
-    // TODO: Integrate with PCSX-Redux's actual breakpoint mechanism
+    bool cleared = false;
+    
+    // Clear from our local tracking
     if (breakpoints_.count(address)) {
         breakpoints_.erase(address);
-        std::cout << "Cleared breakpoint at 0x" << std::hex << address << std::dec << std::endl;
-        return true;
+        cleared = true;
     }
-    return false;
+    
+    // Clear from emulator's debug system
+    if (g_emulator && g_emulator->m_debug) {
+        const auto& tree = g_emulator->m_debug->getTree();
+        for (const auto& bp : tree) {
+            uint32_t bp_addr = bp.address() | bp.base();
+            if (bp_addr == address) {
+                g_emulator->m_debug->removeBreakpoint(&bp);
+                cleared = true;
+                break;
+            }
+        }
+    }
+    
+    if (cleared) {
+        std::cout << "Cleared breakpoint at 0x" << std::hex << address << std::dec << std::endl;
+    }
+    
+    return cleared;
 }
 
 std::vector<std::string> MCPServer::ListHardwareRegisters() {
