@@ -26,6 +26,8 @@
 #include <stdexcept>
 
 #include "third_party/json.hpp"
+#include "core/cdrom.h"
+#include "cdrom/cdriso.h"
 
 namespace PCSX {
 
@@ -56,6 +58,7 @@ void MCPServer::RegisterToolsIfNeeded() {
     tools_["get_call_chain"] = {"get_call_chain", "Trace the call chain from the current instruction"};
     tools_["get_call_graph"] = {"get_call_graph", "Get function call graph for a specific function"};
     tools_["get_emulator_state"] = {"get_emulator_state", "Get comprehensive emulator state"};
+    tools_["is_game_loaded"] = {"is_game_loaded", "Check if a game/ISO is currently loaded and running"};
 }
 
 std::vector<MCPServer::Tool> MCPServer::ListTools() {
@@ -126,6 +129,8 @@ MCPServer::ToolResult MCPServer::ExecuteTool(const std::string& tool_name, const
             return ToolGetCallGraph(function_name, depth);
         } else if (tool_name == "get_emulator_state") {
             return ToolGetEmulatorState();
+        } else if (tool_name == "is_game_loaded") {
+            return ToolIsGameLoaded();
         } else {
             return {false, "", "Unknown tool: " + tool_name};
         }
@@ -776,6 +781,59 @@ MCPServer::ToolResult MCPServer::ToolGetCallGraph(const std::string& function_na
 
 MCPServer::ToolResult MCPServer::ToolGetEmulatorState() {
     return {true, GetEmulatorState(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolIsGameLoaded() {
+    if (!g_emulator || !g_emulator->m_cdrom) {
+        return {false, "", "Emulator not initialized"};
+    }
+    
+    nlohmann::json result;
+    
+    // Check if an ISO/game is loaded
+    auto iso = g_emulator->m_cdrom->getIso();
+    bool has_iso = iso && !iso->failed();
+    
+    result["game_loaded"] = has_iso;
+    result["bios_only"] = !has_iso;
+    
+    if (has_iso) {
+        // Get ISO path
+        std::string iso_path = iso->getIsoPath().string();
+        result["iso_path"] = iso_path;
+        result["iso_name"] = iso->getIsoPath().filename().string();
+        
+        // Check if PC is in game code region (not BIOS)
+        uint32_t pc = g_emulator->m_cpu->m_regs.pc;
+        bool in_bios = (pc >= 0xBFC00000 && pc < 0xBFC80000) || 
+                       (pc >= 0x1FC00000 && pc < 0x1FC80000);
+        bool in_game_ram = (pc >= 0x80000000 && pc < 0x80200000) || 
+                           (pc >= 0x00000000 && pc < 0x00200000);
+        
+        result["emulation_active"] = in_game_ram;
+        result["in_bios"] = in_bios;
+        result["current_pc"] = pc;
+        
+        // Try to detect if game has started by checking if RAM has been written
+        // A simple heuristic: check if first 1KB of RAM is non-zero
+        bool ram_initialized = false;
+        for (uint32_t i = 0; i < 256; i++) {
+            if (g_emulator->m_mem->read32(i * 4) != 0) {
+                ram_initialized = true;
+                break;
+            }
+        }
+        result["ram_initialized"] = ram_initialized;
+    } else {
+        result["iso_path"] = "";
+        result["iso_name"] = "";
+        result["emulation_active"] = false;
+        result["in_bios"] = true;
+        result["current_pc"] = g_emulator->m_cpu->m_regs.pc;
+        result["ram_initialized"] = false;
+    }
+    
+    return {true, result.dump(), ""};
 }
 
 // Serialization helpers

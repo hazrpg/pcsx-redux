@@ -304,6 +304,7 @@ class MCPServer {
     static ToolResult ToolGetCallChain(uint32_t max_depth);
     static ToolResult ToolGetCallGraph(const std::string& function_name, uint32_t depth);
     static ToolResult ToolGetEmulatorState();
+    static ToolResult ToolIsGameLoaded();
 
     // Utility functions
     static std::string SerializeState(const CPUState& state);
