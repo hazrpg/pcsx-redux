@@ -309,35 +309,30 @@ bool MCPServer::SetBreakpoint(uint32_t address, const std::string& condition) {
         return false;
     }
     
-    // Normalize address (remove region bits)
-    uint32_t base = address & 0xe0000000;
-    uint32_t normalized = address & ~0xe0000000;
-    
-    // Create invoker that logs and pauses
-    Debug::BreakpointInvoker invoker = [](const Debug::Breakpoint* self, uint32_t addr, unsigned width, const char* cause) {
-        std::cout << "[MCP] Breakpoint hit at 0x" << std::hex << addr << std::dec << ": " << cause << std::endl;
-        g_system->pause();
-        return true;
-    };
-    
-    // Add the breakpoint (4 bytes width for instruction)
+    // Add the breakpoint using default invoker (like GUI does)
+    // Use the overload with label for better identification
+    std::string label = "MCP_0x" + std::to_string(address);
     Debug::Breakpoint* bp = g_emulator->m_debug->addBreakpoint(
         address, 
         Debug::BreakpointType::Exec, 
         4, 
-        "MCP Breakpoint", 
-        invoker
+        "MCP", 
+        label
+        // Using default invoker which calls g_system->pause()
     );
     
     if (bp) {
-        bp->label("MCP_" + std::to_string(address));
-        std::cout << "Set breakpoint at 0x" << std::hex << address << std::dec << std::endl;
+        // Enable the breakpoint (should be enabled by default, but ensure it is)
+        bp->enable();
+        std::cout << "Set breakpoint at 0x" << std::hex << address << std::dec 
+                  << " (normalized: 0x" << (address & ~0xe0000000) << ")" << std::endl;
         
-        // Also track in our local storage for MCP management
+        // Track in our local storage for MCP management
         breakpoints_[address] = {address, condition, false, true};
         return true;
     }
     
+    std::cout << "Failed to set breakpoint at 0x" << std::hex << address << std::dec << std::endl;
     return false;
 }
 
