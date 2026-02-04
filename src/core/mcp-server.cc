@@ -707,7 +707,8 @@ std::string MCPServer::HandleMCPRequest(const std::string& request_str) {
                 }},
                 {"serverInfo", {
                     {"name", "PCSX-Redux MCP Server"},
-                    {"version", "1.0.0"}
+                    {"version", "1.0.0"},
+                    {"notes", "This MCP server is experimental and under active development. Some tools may have limited functionality or return mock data. Use with caution for critical analysis tasks."}
                 }}
             };
         } else if (method == "tools/list") {
