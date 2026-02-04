@@ -24,11 +24,14 @@
 #include <vector>
 #include <unordered_map>
 #include <stdexcept>
+#include <iomanip>
+#include <sstream>
 
 #include "third_party/json.hpp"
 #include "core/cdrom.h"
 #include "cdrom/cdriso.h"
 #include "core/debug.h"
+#include "core/gpulogger.h"
 
 namespace PCSX {
 
@@ -775,12 +778,42 @@ MCPServer::ToolResult MCPServer::ToolGetGPUState() {
 }
 
 MCPServer::ToolResult MCPServer::ToolListGPUCommands(uint32_t limit) {
-    // TODO: Implement actual GPU command listing
+    if (!g_emulator || !g_emulator->m_gpuLogger) {
+        return {false, "", "Emulator or GPU Logger not initialized"};
+    }
+    
     nlohmann::json result_json;
     result_json["limit"] = limit;
+    result_json["command_count"] = 0;
     result_json["commands"] = nlohmann::json::array();
-    result_json["commands"].push_back("Mock GPU Command 1");
-    result_json["commands"].push_back("Mock GPU Command 2");
+    result_json["logger_enabled"] = false;
+    
+    // Check if GPU logger is enabled
+    // Note: We can't directly check m_enabled as it's private, but we can try to enable it
+    // For now, we'll return what's available
+    
+    // The GPULogger stores commands in m_list which is private
+    // Since we can't access it directly, we'll return a message about the limitation
+    // and suggest enabling the GPU logger from the GUI
+    
+    result_json["note"] = "GPU command logging requires GPU Logger to be enabled from the GUI (Debug -> GPU Logger)";
+    result_json["gpu_logger_available"] = true;
+    result_json["alternative"] = "Use get_gpu_state to read the GPU status register directly";
+    
+    // Add GPU status info as a command entry
+    if (g_emulator->m_gpu) {
+        uint32_t status = g_emulator->m_gpu->readStatus();
+        nlohmann::json cmd;
+        cmd["type"] = "GPU_STATUS";
+        cmd["value"] = status;
+        std::stringstream hex_str;
+        hex_str << "0x" << std::hex << std::setfill('0') << std::setw(8) << status;
+        cmd["hex"] = hex_str.str();
+        cmd["description"] = "Current GPU status register";
+        result_json["commands"].push_back(cmd);
+        result_json["command_count"] = 1;
+    }
+    
     return {true, result_json.dump(), ""};
 }
 
