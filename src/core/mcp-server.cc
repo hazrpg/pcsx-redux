@@ -721,7 +721,8 @@ std::string MCPServer::HandleMCPRequest(const std::string& request_str) {
                     {"inputSchema", {
                         {"type", "object"},
                         {"properties", nlohmann::json::object()}
-                    }}
+                    }},
+                    {"notes", "This MCP server is experimental and under active development. Some tools may return mock data or have limited functionality. Use with caution for critical analysis tasks."}
                 });
             }
             response_json["result"] = {{"tools", tools_array}};
