@@ -306,6 +306,15 @@ class MCPServer {
     static ToolResult ToolGetEmulatorState();
     static ToolResult ToolIsGameLoaded();
 
+    // Execution control tools
+    static ToolResult ToolPause();
+    static ToolResult ToolResume();
+    static ToolResult ToolStepIn();
+    static ToolResult ToolStepOver();
+    static ToolResult ToolStepOut();
+    static ToolResult ToolRunToAddress(uint32_t address);
+    static ToolResult ToolGetExecutionState();
+
     // Utility functions
     static std::string SerializeState(const CPUState& state);
     static std::string SerializeState(const MemoryState& state);

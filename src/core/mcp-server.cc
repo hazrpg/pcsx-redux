@@ -34,6 +34,7 @@
 #include "core/debug.h"
 #include "core/gpulogger.h"
 #include "core/callstacks.h"
+#include "core/disr3000a.h"
 
 namespace PCSX {
 
@@ -41,6 +42,27 @@ namespace PCSX {
 MCPServer::Config MCPServer::config_;
 std::unordered_map<uint32_t, MCPServer::Breakpoint> MCPServer::breakpoints_;
 std::unordered_map<std::string, MCPServer::Tool> MCPServer::tools_;
+
+// Helper function to parse address from JSON (supports hex strings or numeric values)
+static uint32_t parseAddress(const nlohmann::json& value) {
+    if (value.is_string()) {
+        std::string str = value.get<std::string>();
+        // Support hex strings like "0x80010000" or "80010000"
+        uint32_t addr;
+        std::stringstream ss;
+        if (str.find("0x") == 0 || str.find("0X") == 0) {
+            ss << std::hex << str.substr(2);
+        } else {
+            // Try to parse as hex first, then decimal
+            ss << std::hex << str;
+        }
+        ss >> addr;
+        return addr;
+    } else if (value.is_number()) {
+        return value.get<uint32_t>();
+    }
+    throw std::runtime_error("Address must be a number or hex string");
+}
 
 void MCPServer::RegisterToolsIfNeeded() {
     if (!tools_.empty()) {
@@ -65,6 +87,15 @@ void MCPServer::RegisterToolsIfNeeded() {
     tools_["get_call_graph"] = {"get_call_graph", "Get function call graph for a specific function"};
     tools_["get_emulator_state"] = {"get_emulator_state", "Get comprehensive emulator state"};
     tools_["is_game_loaded"] = {"is_game_loaded", "Check if a game/ISO is currently loaded and running"};
+    
+    // Execution control tools
+    tools_["pause"] = {"pause", "Pause emulator execution"};
+    tools_["resume"] = {"resume", "Resume emulator execution"};
+    tools_["step_in"] = {"step_in", "Step into next instruction"};
+    tools_["step_over"] = {"step_over", "Step over next instruction (skip function calls)"};
+    tools_["step_out"] = {"step_out", "Step out of current function"};
+    tools_["run_to_address"] = {"run_to_address", "Run emulator until specified address (address)"};
+    tools_["get_execution_state"] = {"get_execution_state", "Get current execution state (running/paused)"};
 }
 
 std::vector<MCPServer::Tool> MCPServer::ListTools() {
@@ -86,11 +117,11 @@ MCPServer::ToolResult MCPServer::ExecuteTool(const std::string& tool_name, const
         } else if (tool_name == "get_memory_map") {
             return ToolGetMemoryMap();
         } else if (tool_name == "get_memory_range") {
-            uint32_t address = args.at("address").get<uint32_t>();
-            uint32_t length = args.at("length").get<uint32_t>();
+            uint32_t address = parseAddress(args.at("address"));
+            uint32_t length = parseAddress(args.at("length"));
             return ToolGetMemoryRange(address, length);
         } else if (tool_name == "hexdump") {
-            uint32_t address = args.at("address").get<uint32_t>();
+            uint32_t address = parseAddress(args.at("address"));
             uint32_t length = args.value("length", 256);
             return ToolHexdump(address, length);
         } else if (tool_name == "find_string") {
@@ -113,18 +144,18 @@ MCPServer::ToolResult MCPServer::ExecuteTool(const std::string& tool_name, const
             return ToolReadHardwareRegister(reg_name);
         } else if (tool_name == "write_hardware_register") {
             std::string reg_name = args.at("register").get<std::string>();
-            uint32_t value = args.at("value").get<uint32_t>();
+            uint32_t value = parseAddress(args.at("value"));
             return ToolWriteHardwareRegister(reg_name, value);
         } else if (tool_name == "get_dma_state") {
             uint32_t channel = args.at("channel").get<uint32_t>();
             return ToolGetDMAState(channel);
         } else if (tool_name == "set_breakpoint") {
-            uint32_t address = args.at("address").get<uint32_t>();
+            uint32_t address = parseAddress(args.at("address"));
             return ToolSetBreakpoint(address);
         } else if (tool_name == "get_breakpoints") {
             return ToolGetBreakpoints();
         } else if (tool_name == "clear_breakpoint") {
-            uint32_t address = args.at("address").get<uint32_t>();
+            uint32_t address = parseAddress(args.at("address"));
             return ToolClearBreakpoint(address);
         } else if (tool_name == "get_call_chain") {
             uint32_t max_depth = args.value("max_depth", 10);
@@ -137,6 +168,21 @@ MCPServer::ToolResult MCPServer::ExecuteTool(const std::string& tool_name, const
             return ToolGetEmulatorState();
         } else if (tool_name == "is_game_loaded") {
             return ToolIsGameLoaded();
+        } else if (tool_name == "pause") {
+            return ToolPause();
+        } else if (tool_name == "resume") {
+            return ToolResume();
+        } else if (tool_name == "step_in") {
+            return ToolStepIn();
+        } else if (tool_name == "step_over") {
+            return ToolStepOver();
+        } else if (tool_name == "step_out") {
+            return ToolStepOut();
+        } else if (tool_name == "run_to_address") {
+            uint32_t address = parseAddress(args.at("address"));
+            return ToolRunToAddress(address);
+        } else if (tool_name == "get_execution_state") {
+            return ToolGetExecutionState();
         } else {
             return {false, "", "Unknown tool: " + tool_name};
         }
@@ -163,10 +209,34 @@ MCPServer::CPUState MCPServer::GetCPUState() {
         state.s2 = g_emulator->m_cpu->m_regs.GPR.r[18];
 
         state.instruction = g_emulator->m_cpu->m_regs.code;
-        // Mock instruction decoding for now
-        state.instruction_hex = "0x" + std::to_string(state.instruction);
-        state.instruction_decoded = "MOCK_INSTRUCTION"; // TODO: Implement actual MIPS decoding
-        state.breakdown = {0, 0, "", ""}; // TODO: Implement actual MIPS decoding
+        
+        // Format instruction as hex
+        std::stringstream ss_inst;
+        ss_inst << "0x" << std::hex << std::setfill('0') << std::setw(8) << state.instruction;
+        state.instruction_hex = ss_inst.str();
+        
+        // Decode instruction using PCSX-Redux disassembler
+        uint32_t nextCode = 0;  // Next instruction (we don't have it here, use 0)
+        std::string disasm = Disasm::asString(state.instruction, nextCode, state.pc, nullptr, false);
+        
+        // Extract just the mnemonic part (after "PC CODE: ")
+        // Format is: "80010000 12345678: ADD v0, v1, v2"
+        size_t colonPos = disasm.find(':');
+        if (colonPos != std::string::npos && colonPos + 2 < disasm.length()) {
+            state.instruction_decoded = disasm.substr(colonPos + 2);
+        } else {
+            state.instruction_decoded = disasm;
+        }
+        
+        // Parse instruction breakdown (opcode, function, etc.)
+        // For now, use basic parsing - could be enhanced later
+        uint32_t opcode = (state.instruction >> 26) & 0x3F;
+        uint32_t funct = state.instruction & 0x3F;
+        uint32_t rs = (state.instruction >> 21) & 0x1F;
+        uint32_t rt = (state.instruction >> 16) & 0x1F;
+        uint32_t rd = (state.instruction >> 11) & 0x1F;
+        
+        state.breakdown = {opcode, funct, Disasm::s_disRNameGPR[rs], Disasm::s_disRNameGPR[rt]};
     }
     return state;
 }
@@ -311,7 +381,9 @@ bool MCPServer::SetBreakpoint(uint32_t address, const std::string& condition) {
     
     // Add the breakpoint using default invoker (like GUI does)
     // Use the overload with label for better identification
-    std::string label = "MCP_0x" + std::to_string(address);
+    std::stringstream ss_label;
+    ss_label << "MCP_0x" << std::hex << std::setfill('0') << std::setw(8) << address;
+    std::string label = ss_label.str();
     Debug::Breakpoint* bp = g_emulator->m_debug->addBreakpoint(
         address, 
         Debug::BreakpointType::Exec, 
@@ -1192,6 +1264,149 @@ std::string MCPServer::SerializeState(const HardwareState& state) {
         j["counter"][i]["enabled"] = state.counter[i].enabled;
     }
     return j.dump();
+}
+
+// Execution Control Tool Implementations
+
+MCPServer::ToolResult MCPServer::ToolPause() {
+    if (!g_emulator) {
+        return {false, "", "Emulator not initialized"};
+    }
+    
+    g_system->pause();
+    
+    nlohmann::json result;
+    result["status"] = "paused";
+    result["message"] = "Emulator execution paused";
+    
+    return {true, result.dump(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolResume() {
+    if (!g_emulator) {
+        return {false, "", "Emulator not initialized"};
+    }
+    
+    g_system->resume();
+    
+    nlohmann::json result;
+    result["status"] = "running";
+    result["message"] = "Emulator execution resumed";
+    
+    return {true, result.dump(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolStepIn() {
+    if (!g_emulator || !g_emulator->m_debug) {
+        return {false, "", "Emulator or debug subsystem not initialized"};
+    }
+    
+    g_emulator->m_debug->stepIn();
+    
+    // Get updated CPU state after step
+    CPUState cpu_state = GetCPUState();
+    
+    nlohmann::json result;
+    result["status"] = "stepped";
+    result["message"] = "Stepped into next instruction";
+    result["pc"] = cpu_state.pc;
+    result["instruction"] = cpu_state.instruction_decoded;
+    
+    return {true, result.dump(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolStepOver() {
+    if (!g_emulator || !g_emulator->m_debug) {
+        return {false, "", "Emulator or debug subsystem not initialized"};
+    }
+    
+    g_emulator->m_debug->stepOver();
+    
+    // Get updated CPU state after step
+    CPUState cpu_state = GetCPUState();
+    
+    nlohmann::json result;
+    result["status"] = "stepped_over";
+    result["message"] = "Stepped over next instruction";
+    result["pc"] = cpu_state.pc;
+    result["instruction"] = cpu_state.instruction_decoded;
+    
+    return {true, result.dump(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolStepOut() {
+    if (!g_emulator || !g_emulator->m_debug) {
+        return {false, "", "Emulator or debug subsystem not initialized"};
+    }
+    
+    g_emulator->m_debug->stepOut();
+    
+    // Get updated CPU state after step
+    CPUState cpu_state = GetCPUState();
+    
+    nlohmann::json result;
+    result["status"] = "stepped_out";
+    result["message"] = "Stepped out of current function";
+    result["pc"] = cpu_state.pc;
+    result["instruction"] = cpu_state.instruction_decoded;
+    
+    return {true, result.dump(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolRunToAddress(uint32_t address) {
+    if (!g_emulator || !g_emulator->m_debug) {
+        return {false, "", "Emulator or debug subsystem not initialized"};
+    }
+    
+    // Set a temporary breakpoint at the target address
+    auto* bp = g_emulator->m_debug->addBreakpoint(
+        address, 
+        PCSX::Debug::BreakpointType::Exec, 
+        1, 
+        "MCP run_to_address",
+        [](PCSX::Debug::Breakpoint* self, uint32_t addr, unsigned width, const char* cause) {
+            g_system->pause();
+            // Remove the temporary breakpoint after hitting it
+            g_emulator->m_debug->removeBreakpoint(self);
+            return true;
+        }
+    );
+    
+    if (!bp) {
+        return {false, "", "Failed to set temporary breakpoint"};
+    }
+    
+    // Resume execution
+    g_system->resume();
+    
+    nlohmann::json result;
+    result["status"] = "running_to_address";
+    result["target_address"] = address;
+    std::stringstream ss_msg;
+    ss_msg << "Emulator running until address 0x" << std::hex << std::setfill('0') << std::setw(8) << address;
+    result["message"] = ss_msg.str();
+    
+    return {true, result.dump(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolGetExecutionState() {
+    if (!g_emulator) {
+        return {false, "", "Emulator not initialized"};
+    }
+    
+    bool is_running = g_system->running();
+    
+    nlohmann::json result;
+    result["running"] = is_running;
+    result["status"] = is_running ? "running" : "paused";
+    
+    // Add current PC if paused
+    if (!is_running && g_emulator->m_cpu) {
+        result["pc"] = g_emulator->m_cpu->m_regs.pc;
+        result["instruction"] = g_emulator->m_cpu->m_regs.code;
+    }
+    
+    return {true, result.dump(), ""};
 }
 
 } // namespace PCSX
