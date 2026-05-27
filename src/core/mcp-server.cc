@@ -64,6 +64,43 @@ static uint32_t parseAddress(const nlohmann::json& value) {
     throw std::runtime_error("Address must be a number or hex string");
 }
 
+// Helper to get required string parameter with validation
+static std::string getRequiredString(const nlohmann::json& args, 
+                                    const std::string& key,
+                                    const std::string& tool_name) {
+    if (!args.contains(key)) {
+        throw std::runtime_error("Missing required parameter '" + key + "' for tool '" + tool_name + "'");
+    }
+    if (!args.at(key).is_string()) {
+        throw std::runtime_error("Parameter '" + key + "' must be a string for tool '" + tool_name + "'");
+    }
+    return args.at(key).get<std::string>();
+}
+
+// Helper to get required address parameter with validation
+static uint32_t getRequiredAddress(const nlohmann::json& args,
+                                  const std::string& key,
+                                  const std::string& tool_name) {
+    if (!args.contains(key)) {
+        throw std::runtime_error("Missing required parameter '" + key + "' for tool '" + tool_name + 
+                               "'. Provide as hex string (\"0x80010000\") or decimal number (2147549184)");
+    }
+    return parseAddress(args.at(key));
+}
+
+// Helper to get required number parameter with validation
+static uint32_t getRequiredNumber(const nlohmann::json& args,
+                                 const std::string& key,
+                                 const std::string& tool_name) {
+    if (!args.contains(key)) {
+        throw std::runtime_error("Missing required parameter '" + key + "' for tool '" + tool_name + "'");
+    }
+    if (!args.at(key).is_number()) {
+        throw std::runtime_error("Parameter '" + key + "' must be a number for tool '" + tool_name + "'");
+    }
+    return args.at(key).get<uint32_t>();
+}
+
 void MCPServer::RegisterToolsIfNeeded() {
     if (!tools_.empty()) {
         return;
@@ -96,6 +133,7 @@ void MCPServer::RegisterToolsIfNeeded() {
     tools_["step_out"] = {"step_out", "Step out of current function"};
     tools_["run_to_address"] = {"run_to_address", "Run emulator until specified address (address)"};
     tools_["get_execution_state"] = {"get_execution_state", "Get current execution state (running/paused)"};
+    tools_["how_to_use_mcp"] = {"how_to_use_mcp", "Get AI-friendly guide on how to use MCP tools effectively"};
 }
 
 std::vector<MCPServer::Tool> MCPServer::ListTools() {
@@ -117,19 +155,19 @@ MCPServer::ToolResult MCPServer::ExecuteTool(const std::string& tool_name, const
         } else if (tool_name == "get_memory_map") {
             return ToolGetMemoryMap();
         } else if (tool_name == "get_memory_range") {
-            uint32_t address = parseAddress(args.at("address"));
-            uint32_t length = parseAddress(args.at("length"));
+            uint32_t address = getRequiredAddress(args, "address", tool_name);
+            uint32_t length = getRequiredAddress(args, "length", tool_name);
             return ToolGetMemoryRange(address, length);
         } else if (tool_name == "hexdump") {
-            uint32_t address = parseAddress(args.at("address"));
+            uint32_t address = getRequiredAddress(args, "address", tool_name);
             uint32_t length = args.value("length", 256);
             return ToolHexdump(address, length);
         } else if (tool_name == "find_string") {
-            std::string pattern = args.at("pattern").get<std::string>();
+            std::string pattern = getRequiredString(args, "pattern", tool_name);
             std::string region = args.value("region", "ram");
             return ToolFindString(pattern, region);
         } else if (tool_name == "search_bytes") {
-            std::string pattern = args.at("pattern").get<std::string>();
+            std::string pattern = getRequiredString(args, "pattern", tool_name);
             std::string region = args.value("region", "ram");
             return ToolSearchBytes(pattern, region);
         } else if (tool_name == "get_gpu_state") {
@@ -140,28 +178,28 @@ MCPServer::ToolResult MCPServer::ExecuteTool(const std::string& tool_name, const
         } else if (tool_name == "list_hardware_registers") {
             return ToolListHardwareRegisters();
         } else if (tool_name == "read_hardware_register") {
-            std::string reg_name = args.at("register").get<std::string>();
+            std::string reg_name = getRequiredString(args, "register", tool_name);
             return ToolReadHardwareRegister(reg_name);
         } else if (tool_name == "write_hardware_register") {
-            std::string reg_name = args.at("register").get<std::string>();
-            uint32_t value = parseAddress(args.at("value"));
+            std::string reg_name = getRequiredString(args, "register", tool_name);
+            uint32_t value = getRequiredAddress(args, "value", tool_name);
             return ToolWriteHardwareRegister(reg_name, value);
         } else if (tool_name == "get_dma_state") {
-            uint32_t channel = args.at("channel").get<uint32_t>();
+            uint32_t channel = getRequiredNumber(args, "channel", tool_name);
             return ToolGetDMAState(channel);
         } else if (tool_name == "set_breakpoint") {
-            uint32_t address = parseAddress(args.at("address"));
+            uint32_t address = getRequiredAddress(args, "address", tool_name);
             return ToolSetBreakpoint(address);
         } else if (tool_name == "get_breakpoints") {
             return ToolGetBreakpoints();
         } else if (tool_name == "clear_breakpoint") {
-            uint32_t address = parseAddress(args.at("address"));
+            uint32_t address = getRequiredAddress(args, "address", tool_name);
             return ToolClearBreakpoint(address);
         } else if (tool_name == "get_call_chain") {
             uint32_t max_depth = args.value("max_depth", 10);
             return ToolGetCallChain(max_depth);
         } else if (tool_name == "get_call_graph") {
-            std::string function_name = args.at("function").get<std::string>();
+            std::string function_name = getRequiredString(args, "function", tool_name);
             uint32_t depth = args.value("depth", 3);
             return ToolGetCallGraph(function_name, depth);
         } else if (tool_name == "get_emulator_state") {
@@ -179,10 +217,12 @@ MCPServer::ToolResult MCPServer::ExecuteTool(const std::string& tool_name, const
         } else if (tool_name == "step_out") {
             return ToolStepOut();
         } else if (tool_name == "run_to_address") {
-            uint32_t address = parseAddress(args.at("address"));
+            uint32_t address = getRequiredAddress(args, "address", tool_name);
             return ToolRunToAddress(address);
         } else if (tool_name == "get_execution_state") {
             return ToolGetExecutionState();
+        } else if (tool_name == "how_to_use_mcp") {
+            return ToolHowToUseMCP();
         } else {
             return {false, "", "Unknown tool: " + tool_name};
         }
@@ -1407,6 +1447,226 @@ MCPServer::ToolResult MCPServer::ToolGetExecutionState() {
     }
     
     return {true, result.dump(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolHowToUseMCP() {
+    nlohmann::json guide;
+    
+    guide["title"] = "MCP Server Usage Guide for AI Assistants";
+    guide["version"] = "1.0";
+    guide["total_tools"] = 27;
+    
+    // Overview
+    guide["overview"] = {
+        {"description", "The PCSX-Redux MCP server provides 27 tools for analyzing PlayStation 1 games in real-time"},
+        {"capabilities", nlohmann::json::array({
+            "Execution control (pause, resume, step through code)",
+            "Real MIPS R3000A disassembly",
+            "Memory inspection and search",
+            "GPU and DMA monitoring",
+            "Hardware register access",
+            "Breakpoint management",
+            "Call chain and graph tracing"
+        })},
+        {"addressing", "All addresses accept hex strings (\"0x80010000\") or decimal numbers (2147549184)"}
+    };
+    
+    // Quick Start Workflow
+    guide["quick_start"] = {
+        {"step1", {
+            {"action", "Check if game is loaded"},
+            {"tool", "is_game_loaded"},
+            {"arguments", nlohmann::json::object()},
+            {"why", "Verify emulator state before analysis"}
+        }},
+        {"step2", {
+            {"action", "Pause execution to inspect state"},
+            {"tool", "pause"},
+            {"arguments", nlohmann::json::object()},
+            {"why", "Freeze game to examine CPU/memory safely"}
+        }},
+        {"step3", {
+            {"action", "Get current CPU state"},
+            {"tool", "get_cpu_state"},
+            {"arguments", nlohmann::json::object()},
+            {"why", "See PC, registers, and disassembled instruction"}
+        }},
+        {"step4", {
+            {"action", "Examine memory layout"},
+            {"tool", "get_memory_map"},
+            {"arguments", nlohmann::json::object()},
+            {"why", "Understand RAM, BIOS, and hardware regions"}
+        }}
+    };
+    
+    // Common Analysis Patterns
+    guide["analysis_patterns"] = {
+        {"finding_game_code", {
+            {"description", "Locate main game code and routines"},
+            {"steps", nlohmann::json::array({
+                "1. pause() - Stop execution",
+                "2. get_cpu_state() - Check current PC (usually in 0x80000000-0x801FFFFF range)",
+                "3. hexdump(pc_address, 256) - Read surrounding code",
+                "4. step_in() repeatedly - Trace execution flow",
+                "5. set_breakpoint(interesting_address) - Mark important locations"
+            })}
+        }},
+        {"finding_variables", {
+            {"description", "Locate game variables like health, score, position"},
+            {"steps", nlohmann::json::array({
+                "1. find_string(\"HP\") or search_bytes(\"pattern\") - Search RAM",
+                "2. hexdump(found_address, 64) - Examine surrounding data",
+                "3. Resume game and repeat search to find changing values",
+                "4. set_breakpoint(address) on suspected variable access",
+                "5. get_call_chain() when breakpoint hits - See what code accesses it"
+            })}
+        }},
+        {"tracing_function", {
+            {"description", "Understand what a function does"},
+            {"steps", nlohmann::json::array({
+                "1. set_breakpoint(function_start_address)",
+                "2. resume() - Let game run to breakpoint",
+                "3. get_cpu_state() - Verify you're at function entry",
+                "4. step_in() or step_over() - Trace through function",
+                "5. Watch memory changes with hexdump() between steps",
+                "6. step_out() - Return to caller"
+            })}
+        }},
+        {"monitoring_gpu", {
+            {"description", "Analyze rendering and graphics"},
+            {"steps", nlohmann::json::array({
+                "1. get_gpu_state() - Check GPU status register",
+                "2. list_gpu_commands(20) - See recent GPU commands",
+                "3. get_dma_state(2) - Check GPU DMA channel (channel 2)",
+                "4. Correlate with CPU code using breakpoints"
+            })}
+        }}
+    };
+    
+    // Tool Categories with Best Practices
+    guide["tool_categories"] = {
+        {"execution_control", {
+            {"tools", nlohmann::json::array({"pause", "resume", "step_in", "step_over", "step_out", "run_to_address", "get_execution_state"})},
+            {"best_practice", "Always pause() before inspecting state. Use step_over() to skip library functions. Use run_to_address() for quick navigation."}
+        }},
+        {"cpu_memory", {
+            {"tools", nlohmann::json::array({"get_cpu_state", "get_memory_map", "get_memory_range", "hexdump", "find_string", "search_bytes"})},
+            {"best_practice", "get_cpu_state() shows real MIPS disassembly. Use hexdump() for small regions, get_memory_range() for bulk reads. Search RAM region for game data."}
+        }},
+        {"debugging", {
+            {"tools", nlohmann::json::array({"set_breakpoint", "get_breakpoints", "clear_breakpoint", "get_call_chain", "get_call_graph"})},
+            {"best_practice", "Set breakpoints on interesting addresses. Use get_call_chain() to understand execution context. Remember breakpoint addresses for later sessions."}
+        }},
+        {"hardware", {
+            {"tools", nlohmann::json::array({"list_hardware_registers", "read_hardware_register", "write_hardware_register", "get_dma_state", "get_gpu_state", "list_gpu_commands"})},
+            {"best_practice", "Monitor I_STAT for interrupts. Check DMA channels 2 (GPU) and 6 (OT). GPU status shows display mode and busy state."}
+        }},
+        {"state", {
+            {"tools", nlohmann::json::array({"get_emulator_state", "is_game_loaded"})},
+            {"best_practice", "Use get_emulator_state() for comprehensive snapshot. Check is_game_loaded() before starting analysis."}
+        }}
+    };
+    
+    // Important Addresses
+    guide["memory_regions"] = {
+        {"ram", {
+            {"range", "0x00000000 - 0x001FFFFF (KUSEG) or 0x80000000 - 0x801FFFFF (KSEG0)"},
+            {"size", "2 MB"},
+            {"usage", "Main game code and data. Most analysis happens here."}
+        }},
+        {"scratchpad", {
+            {"range", "0x1F800000 - 0x1F8003FF"},
+            {"size", "1 KB"},
+            {"usage", "Fast CPU cache. Check for performance-critical code."}
+        }},
+        {"hardware_regs", {
+            {"range", "0x1F801000 - 0x1F802FFF"},
+            {"size", "8 KB"},
+            {"usage", "Memory control, interrupts, DMA, timers, GPU, etc."}
+        }},
+        {"bios", {
+            {"range", "0x1FC00000 - 0x1FC7FFFF (or 0xBFC00000 - 0xBFC7FFFF)"},
+            {"size", "512 KB"},
+            {"usage", "BIOS ROM. System initialization and kernel functions."}
+        }}
+    };
+    
+    // Tips and Tricks
+    guide["tips"] = {
+        {"tip1", "MIPS disassembly in get_cpu_state() shows actual instruction mnemonics (ADD, LW, BEQ, etc.)"},
+        {"tip2", "Use hex addresses \"0x80010000\" - easier to read than decimal 2147549184"},
+        {"tip3", "Stack pointer (sp) grows downward. Watch sp in get_cpu_state() to track function calls."},
+        {"tip4", "Return address (ra) shows where function will return. Useful for understanding call flow."},
+        {"tip5", "JAL (Jump And Link) and JALR are function calls. JR $ra is function return."},
+        {"tip6", "Search for strings like game title or \"SCUS\" to find game-specific code."},
+        {"tip7", "DMA channel 2 is GPU, channel 4 is SPU (audio), channel 6 is OT (ordering table)."},
+        {"tip8", "If PC is in BIOS range (0xBFC00000), game hasn't loaded yet or crashed."},
+        {"tip9", "Combine step_in() with get_cpu_state() to trace instruction-by-instruction."},
+        {"tip10", "Use get_emulator_state() to get everything at once - CPU, GPU, DMA, memory map, breakpoints."}
+    };
+    
+    // Error Handling
+    guide["common_errors"] = {
+        {"missing_parameter", {
+            {"error", "JSON parse error: key 'address' not found"},
+            {"cause", "Required parameter missing from tool call"},
+            {"fix", "Always provide required parameters. Example: {\"address\": \"0x80010000\"}"}
+        }},
+        {"invalid_address", {
+            {"error", "Address out of range or invalid format"},
+            {"cause", "Address outside valid memory regions"},
+            {"fix", "Check get_memory_map() for valid ranges. Use hex strings for clarity."}
+        }},
+        {"emulator_not_initialized", {
+            {"error", "Emulator not initialized"},
+            {"cause", "Emulator not fully started or crashed"},
+            {"fix", "Check is_game_loaded() first. Restart emulator if needed."}
+        }}
+    };
+    
+    // Advanced Techniques
+    guide["advanced"] = {
+        {"reverse_engineering", "Use set_breakpoint() + get_call_chain() to map function relationships. Build control flow graph manually."},
+        {"performance_profiling", "Use timers (TIMER0-2 registers) to measure code execution time. Check DMA transfer counts."},
+        {"save_state_analysis", "Pause at interesting moments, dump memory with hexdump(), compare across game states."},
+        {"cheat_finding", "Search for numeric values with search_bytes(), modify game state, trace what code reads them."}
+    };
+    
+    // Example Complete Session
+    guide["example_session"] = nlohmann::json::array({
+        "// 1. Verify game is loaded",
+        "{\"tool\": \"is_game_loaded\"}",
+        "",
+        "// 2. Pause to inspect",
+        "{\"tool\": \"pause\"}",
+        "",
+        "// 3. Get current state with MIPS disassembly",
+        "{\"tool\": \"get_cpu_state\"}",
+        "// Returns: {\"pc\": \"0x80010000\", \"instruction_decoded\": \"ADDIU sp, sp, -32\", ...}",
+        "",
+        "// 4. Set breakpoint on suspected function",
+        "{\"tool\": \"set_breakpoint\", \"arguments\": {\"address\": \"0x80011000\"}}",
+        "",
+        "// 5. Resume and wait for breakpoint",
+        "{\"tool\": \"resume\"}",
+        "",
+        "// 6. When hit, trace the function",
+        "{\"tool\": \"get_call_chain\", \"arguments\": {\"max_depth\": 10}}",
+        "",
+        "// 7. Step through instruction by instruction",
+        "{\"tool\": \"step_in\"}",
+        "{\"tool\": \"get_cpu_state\"}",
+        "",
+        "// 8. Read memory around interesting address",
+        "{\"tool\": \"hexdump\", \"arguments\": {\"address\": \"0x80050000\", \"length\": 256}}",
+        "",
+        "// 9. Search for game strings",
+        "{\"tool\": \"find_string\", \"arguments\": {\"pattern\": \"PLAYER\", \"region\": \"ram\"}}"
+    });
+    
+    guide["remember"] = "You have full control over PS1 emulation. Pause, inspect, step, search, and analyze. Build understanding incrementally. Use breakpoints to mark discoveries.";
+    
+    return {true, guide.dump(2), ""};  // Pretty print with 2-space indent
 }
 
 } // namespace PCSX

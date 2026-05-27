@@ -314,6 +314,7 @@ class MCPServer {
     static ToolResult ToolStepOut();
     static ToolResult ToolRunToAddress(uint32_t address);
     static ToolResult ToolGetExecutionState();
+    static ToolResult ToolHowToUseMCP();
 
     // Utility functions
     static std::string SerializeState(const CPUState& state);
