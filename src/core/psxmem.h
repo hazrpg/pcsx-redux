@@ -70,6 +70,13 @@ class Memory {
     void write8(uint32_t address, uint32_t value);
     void write16(uint32_t address, uint32_t value);
     void write32(uint32_t address, uint32_t value);
+    // Aligned 32-bit accesses for LWL/LWR/SWL/SWR, which only consume or overwrite some bytes of the
+    // word. Msan only checks the bytes set in byteMask (bit n = byte n of the word at address).
+    uint32_t read32Masked(uint32_t address, uint32_t byteMask);
+    void write32Masked(uint32_t address, uint32_t value, uint32_t byteMask);
+    // Bytes of the aligned word touched by LWL/SWL and LWR/SWR, for the unaligned address
+    static constexpr uint32_t leftByteMask(uint32_t address) { return (2 << (address & 3)) - 1; }
+    static constexpr uint32_t rightByteMask(uint32_t address) { return (0xf << (address & 3)) & 0xf; }
     const void *pointerRead(uint32_t address);
     const void *pointerWrite(uint32_t address, int size);
 
@@ -93,8 +100,13 @@ class Memory {
 
     template <uint32_t length>
     MsanStatus msanGetStatus(uint32_t addr) const {
+        return msanGetStatus(addr, (1 << length) - 1);
+    }
+
+    // byteMask selects which of the bytes starting at addr are checked, bit n = byte n
+    MsanStatus msanGetStatus(uint32_t addr, uint32_t byteMask) const {
         uint32_t bitmapIndex = (addr - c_msanStart) / 8;
-        uint32_t bitmask = ((1 << length) - 1) << addr % 8;
+        uint32_t bitmask = byteMask << addr % 8;
         MsanStatus bestCase = MsanStatus::OK;
         if (uint32_t nextBitmask = bitmask >> 8) [[unlikely]] {
             if ((m_msanInitializedBitmap[bitmapIndex + 1] & nextBitmask) != nextBitmask) {
@@ -117,8 +129,12 @@ class Memory {
     // if the write is valid, marks the address as initialized, otherwise returns false
     template <uint32_t length>
     bool msanValidateWrite(uint32_t addr) {
+        return msanValidateWrite(addr, (1 << length) - 1);
+    }
+
+    bool msanValidateWrite(uint32_t addr, uint32_t byteMask) {
         uint32_t bitmapIndex = (addr - c_msanStart) / 8;
-        uint32_t bitmask = ((1 << length) - 1) << addr % 8;
+        uint32_t bitmask = byteMask << addr % 8;
         if (uint32_t nextBitmask = bitmask >> 8) [[unlikely]] {
             if ((m_msanUsableBitmap[bitmapIndex + 1] & nextBitmask) != nextBitmask) {
                 return false;
@@ -299,10 +315,31 @@ class Memory {
     IO<MemoryAsFile> getMemoryAsFile() { return m_memoryAsFile; }
 
     bool isiCacheEnabled() { return m_BIU == 0x1e988; }
+    uint32_t getBIU() const { return m_BIU; }
+    // For save states: the guest's own write to 0xfffe0130 also invalidates the code cache on
+    // some values, which a restore does by itself.
+    void setBIU(uint32_t value) {
+        m_BIU = value;
+        setLuts();
+    }
 
   private:
     friend class MemoryAsFile;
     IO<MemoryAsFile> m_memoryAsFile;
+
+    // The scratchpad and the hardware registers share a single 64kB page, and the guest path has
+    // to dispatch register accesses to the hardware itself for their side effects, so that page is
+    // deliberately absent from the read LUT. Both are shadowed by m_hard at the same offsets,
+    // which spans the whole page and is safe to read at any time, so debugger-style accesses -
+    // which want a faithful view of memory and none of the side effects - resolve through here
+    // instead of through the read LUT directly.
+    static constexpr uint32_t c_scratchpadSize = 0x400;
+    uint8_t *debugPointer(uint32_t page) const {
+        auto pointer = m_readLUT[page];
+        if (pointer != nullptr) return pointer;
+        if ((page == 0x1f80) || (page == 0x9f80) || (page == 0xbf80)) return m_hard;
+        return nullptr;
+    }
 
     uint32_t m_biosCRC = 0;
 
@@ -314,9 +351,24 @@ class Memory {
 
     // hopefully this should become private eventually, with only certain classes having direct access.
   public:
+    /* Counts accesses to anything that isn't plain RAM or BIOS ROM, with the scratchpad
+       excluded because a RAM-scoped snapshot covers that too. Zero of these across a stretch
+       of guest execution is positive evidence that the code touched nothing but memory - which
+       turns "this routine is safe to snapshot RAM-only" from an assertion into something with
+       an answer. Keyed on the READ LUT deliberately: the write LUT is nulled wholesale
+       whenever the BIU says the caches are isolated, so keying on it would call every RAM
+       store on a cold machine a hardware access. */
+    uint64_t m_nonRamAccesses = 0;
+    void countNonRamAccess(uint32_t address, uint32_t page) {
+        if (m_readLUT[page] != nullptr) return;
+        if ((page == 0x1f80 || page == 0x9f80 || page == 0xbf80) && ((address & 0xffff) < 0x400)) return;
+        m_nonRamAccesses++;
+    }
+
     uint8_t *m_wram = nullptr;  // Kernel & User Memory (8 Meg)
-    uint8_t *m_exp1 = nullptr;  // Expansion Region 1 (ROM/RAM) / Parallel Port (512K)
+    uint8_t *m_exp1 = nullptr;  // Expansion Region 1 (ROM/RAM) / Parallel Port (8 Meg buffer; up to 256K loaded)
     uint8_t *m_bios = nullptr;  // BIOS ROM (512K)
+    uint8_t *m_sram = nullptr;  // DTL-H2000 dev board BIOS SRAM (2 Meg) @ 0x1fa00000
     uint8_t *m_hard = nullptr;  // Scratch Pad (1K) & Hardware Registers (8K)
 
     uint8_t **m_writeLUT = nullptr;
@@ -325,11 +377,17 @@ class Memory {
     static constexpr uint32_t c_msanSize = 1'610'612'736;
     static constexpr uint32_t c_msanStart = 0x20000000;
     static constexpr uint32_t c_msanEnd = c_msanStart + c_msanSize;
+    // Exit code for msan violations in test mode, matching a failing guest test's exit code.
+    static constexpr int c_msanExitCode = 1;
     uint8_t *m_msanRAM = nullptr;
     uint8_t *m_msanUsableBitmap = nullptr;
     uint8_t *m_msanInitializedBitmap = nullptr;
     uint32_t m_msanPtr = 1024;
     EventBus::Listener m_listener;
+
+    // Address of the psyqo heap metadata struct in guest memory,
+    // registered by the MIPS allocator via pcsxhw write to 0x1f8020a0.
+    uint32_t m_psyqoHeapMetadata = 0;
 
     std::unordered_map<uint32_t, uint32_t> m_msanAllocs;
     static constexpr uint32_t c_msanChainMarker = 0x7ffffd;

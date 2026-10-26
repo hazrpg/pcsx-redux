@@ -26,9 +26,12 @@
 #include "core/psxemulator.h"
 #include "core/psxmem.h"
 #include "core/r3000a.h"
-#include "core/sstate.h"
 
 namespace PCSX {
+
+namespace SaveStates {
+struct Access;
+}
 
 struct SIORegisters {
     uint32_t data;
@@ -93,7 +96,7 @@ class SIO {
 
     void acknowledge();
     void init();
-    void interrupt();
+    void scheduledCallback();
     void reset();
 
     bool copyMcdFile(McdBlock block);
@@ -227,14 +230,14 @@ class SIO {
     };
 
     friend MemoryCard;
-    friend SaveStates::SaveState SaveStates::constructSaveState();
+    friend struct SaveStates::Access;
 
     static constexpr size_t c_padBufferSize = 0x1010;
 
     bool isReceiveIRQReady();
     bool isTransmitReady();
     static inline void scheduleInterrupt(uint64_t eCycle) {
-        g_emulator->m_cpu->scheduleInterrupt(PSXINT_SIO, eCycle);
+        g_emulator->m_cpu->schedule(Schedule::SIO, eCycle);
 #if 0
 // Breaks Twisted Metal 2 intro
         m_statusReg &= ~RX_FIFONOTEMPTY;
@@ -250,6 +253,8 @@ class SIO {
     };
 
     uint8_t m_currentDevice = DeviceType::None;
+    // The first byte of the current pad access: 01h, or 01h to 04h for a multitap's slots.
+    uint8_t m_padAddress = DeviceType::PAD;
 
     // Pads
     uint8_t m_buffer[c_padBufferSize];

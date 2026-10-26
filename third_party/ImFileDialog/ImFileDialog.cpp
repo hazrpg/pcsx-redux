@@ -28,7 +28,10 @@
 #include <pwd.h>
 #endif
 
-#define ICON_SIZE ImGui::GetFont()->FontSize + 3
+#define ICON_SIZE ImGui::GetFont()->LegacySize + 3
+// GImGui->FontSize is the current rendering size on the global ImGui context;
+// it survived ImGui v1.92 (only ImFont::FontSize was removed in favor of
+// LegacySize). The original macro queried the live size, not the loaded one.
 #define GUI_ELEMENT_SIZE std::max(GImGui->FontSize + 10.f, 24.f)
 #define DEFAULT_ICON_SIZE 32
 #define PI 3.141592f
@@ -245,7 +248,7 @@ namespace ifd {
 							newPath += "/";
 #endif
 					}
-					path = std::filesystem::u8path(newPath);
+					path = stringToU8Path(newPath);
 					ret = true;
 				}
 				anyOtherHC |= ImGui::IsItemHovered() | ImGui::IsItemClicked();
@@ -290,7 +293,7 @@ namespace ifd {
 			if (ImGui::InputTextEx("##pathbox_input", "", pathBuffer, 1024, size_arg, ImGuiInputTextFlags_EnterReturnsTrue)) {
 				std::string tempStr(pathBuffer);
 				if (std::filesystem::exists(tempStr))
-					path = std::filesystem::u8path(tempStr);
+					path = stringToU8Path(tempStr);
 				ret = true;
 			}
 			if (!skipActiveCheck && !ImGui::IsItemActive())
@@ -350,7 +353,7 @@ namespace ifd {
 			float radius = i & 1 ? innerRadius : outerRadius;
 			window->DrawList->PathLineTo(ImVec2(center.x + radius * sin(i * angle), center.y - radius * cos(i * angle)));
 		}
-		window->DrawList->PathStroke(ImGui::ColorConvertFloat4ToU32(ImGui::GetStyle().Colors[ImGuiCol_Text]), true, 2.0f);
+		window->DrawList->PathStroke(ImGui::ColorConvertFloat4ToU32(ImGui::GetStyle().Colors[ImGuiCol_Text]), 2.0f, ImDrawFlags_Closed);
 
 		return ret;
 	}
@@ -541,7 +544,7 @@ namespace ifd {
 
 		m_parseFilter(filter);
 		if (!startingDir.empty())
-			m_setDirectory(std::filesystem::u8path(startingDir), false);
+			m_setDirectory(stringToU8Path(startingDir), false);
 		else
 			m_setDirectory(m_currentDirectory, false); // refresh contents
 
@@ -565,7 +568,7 @@ namespace ifd {
 
 		m_parseFilter(filter);
 		if (!startingDir.empty())
-			m_setDirectory(std::filesystem::u8path(startingDir), false);
+			m_setDirectory(stringToU8Path(startingDir), false);
 		else
 			m_setDirectory(m_currentDirectory, false); // refresh contents
 
@@ -635,7 +638,7 @@ namespace ifd {
 		if (std::count(m_favorites.begin(), m_favorites.end(), path) > 0)
 			return;
 
-		if (!std::filesystem::exists(std::filesystem::u8path(path)))
+		if (!std::filesystem::exists(stringToU8Path(path)))
 			return;
 
 		m_favorites.push_back(path);
@@ -690,7 +693,7 @@ namespace ifd {
 
 		if (hasResult) {
 			if (!m_isMultiselect || m_selections.size() <= 1) {
-				std::filesystem::path path = std::filesystem::u8path(filename);
+				std::filesystem::path path = stringToU8Path(filename);
 				if (path.is_absolute()) m_result.push_back(path);
 				else m_result.push_back(m_currentDirectory / path);
 				if (m_type == IFD_DIALOG_DIRECTORY || m_type == IFD_DIALOG_FILE) {
@@ -988,7 +991,7 @@ namespace ifd {
 #ifdef _WIN32
 		// drives don't work well without the backslash symbol
 		if (p.u8string().size() == 2 && p.u8string()[1] == ':')
-			m_currentDirectory = std::filesystem::u8path(p.u8string() + u8"\\");
+			m_currentDirectory = std::filesystem::path(p.u8string() + u8"\\");
 #endif
 
 		m_clearIconPreview();

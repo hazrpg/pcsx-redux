@@ -6,7 +6,7 @@
   zlib,
   curl,
   ffmpeg,
-  glfw3,
+  sdl3,
   capstone,
   freetype,
   libX11,
@@ -16,7 +16,6 @@
   multipart-parser-c,
   fmt,
   magic-enum,
-  miniaudio,
   gtest,
   tl-expected,
   elfio,
@@ -26,6 +25,8 @@
   ucl,
   llhttp,
   zip,
+  libxcb,
+  libGL,
 
   src,
   debugBuild ? false,
@@ -39,26 +40,20 @@ let
     ({
       owner = "grumpycoders";
       repo = "zep";
-      rev = "86ea3c7019f45ccd4a13503bf7d98a396e8f0193";
-      hash = "sha256-6NmUlOHkRQvCgbATcNxnFrfA2ZWROPYN8Vpd10k6Z2g=";
+      rev = "1c107cbe1ed39e5d453cb5d9fb5811abfe644571";
+      hash = "sha256-n2N5/llbPAytHrXZLTjT7tA3q633Vz1i8yBj8WTlRmM=";
+    })
+    ({
+      owner = "pcsx-redux";
+      repo = "thorvg";
+      rev = "e4925951e038f8c514b880305c66fb95c7da4296";
+      hash = "sha256-1chDcHiGjuqoR6naTfAEuVcuoX8bngq/FrKcH44f5qU=";
     })
     ({
       owner = "grumpycoders";
-      repo = "nanosvg";
-      rev = "f0a3e1034dd22e2e87e5db22401e44998383124e";
-      hash = "sha256-af11kAga6Ru2rPgrfcYswXNy9etvH3J9FX2T0I0++ew=";
-    })
-    ({
-      owner = "grumpycoders";
-      repo = "nanovg";
-      rev = "7c021819bbd4843a1a3091fe47346d3fcb2a3e1a";
-      hash = "sha256-gZHbNuDkLXlLlXZZpLBHcbwzTfeBBkLY7xl4L5yr2lY=";
-    })
-    ({
-      owner = "mekhontsev";
       repo = "imgui_md";
-      rev = "8ca75c5f7663f314821e3d0b2c51011792bee68f";
-      hash = "sha256-uxhY81DWLRRCceYn9khk3rwzT+2f9PNMIMT9OrkPfFc=";
+      rev = "193314702e08c9e338a0b9d9346cb93ed4d8b758";
+      hash = "sha256-U783p+I1Sy0Dpmz5wRRp6qLiNqcIZ7pUb3Zezgmwhxc=";
     })
     ({
       owner = "herumi";
@@ -69,26 +64,32 @@ let
     ({
       owner = "lunarmodules";
       repo = "luafilesystem";
-      rev = "912e06714fc276c15b4d5d1b42bd2b11edb8deff";
-      hash = "sha256-BShByo2NhVrOHDPze/JXfeFWq36PFrI2HVugR2MDB0A=";
+      rev = "7f89bc0c6529497e0bc45b33467bf6cbcf6e989d";
+      hash = "sha256-vSP+KFxSzpzG+nJp0+YF+cDo0eddV3PvAm/jyzFDp14=";
     })
     ({
       owner = "grumpycoders";
       repo = "luajit";
-      rev = "66fadd16a51955cfbd770de62806cfbdd7c6c818";
-      hash = "sha256-nFlDr79GC8MsL6ausAsEPJwL8OJrFydB37tpD5mS1C8=";
+      rev = "07c36331bb4e1140322a6f8d91d53b9c2767ed46";
+      hash = "sha256-UNoib5Kf3NxkIKaerZW9NrQ3lyQn0WXvBFRQT+KJrYs=";
     })
     ({
       owner = "ocornut";
       repo = "imgui";
-      rev = "368123ab06b2b573d585e52f84cd782c5c006697";
-      hash = "sha256-6VOs7a31bEfAG75SQAY2X90h/f/HvqZmN615WXYkUOA=";
+      rev = "b48d1afbe8ee8b238e2961dc363a949dd7304e23";
+      hash = "sha256-PknWLxYuXQ73TCFN+eKOJDNLGbg/ZqKSF6mFxkJG6vI=";
     })
     ({
-      owner = "mdqinc";
-      repo = "SDL_GameControllerDB";
-      rev = "b1e342774cbb35467dfdd3634d4f0181a76cbc89";
-      hash = "sha256-LYvO+chDVo6D++fuFbxqSRltGW3y82SESmtFj39TdSA=";
+      owner = "epezent";
+      repo = "implot";
+      rev = "d65a2bef53d32502407de3a4be80f191e2f412d7";
+      hash = "sha256-s7URArbirN8uiInhi95eQW7aoq5Clc67NzUCzcslAi8=";
+    })
+    ({
+      owner = "taocpp";
+      repo = "PEGTL";
+      rev = "d7b821b1e5ed6ab321625f50427c4ae0b78909d5";
+      hash = "sha256-1hTwoTCkfOX7e0unAlZ8TnYva3enkCgfrfriZfx2AoE=";
     })
     ({
       owner = "nothings";
@@ -96,29 +97,57 @@ let
       rev = "ae721c50eaf761660b4f90cc590453cdb0c2acd0";
       hash = "sha256-BIhbhXV7q5vodJ3N14vN9mEVwqrP6z9zqEEQrfLPzvI=";
     })
+    ({
+      owner = "rixnobis";
+      repo = "iec-60908b";
+      rev = "62f7068397b7fae3abcd44e3d1c85c793de8938a";
+      hash = "sha256-haVRc7iIXKk36OTMGCy065OJTiT+B7aFs5MYiWzMotA=";
+    })
+    ({
+      owner = "rixnobis";
+      repo = "cueparser";
+      rev = "17f2c521ddf76466ef23db92b9fa2d7b933ca7ef";
+      hash = "sha256-wBkLoznyekF+HGZagfOdQVyvkjqqgaFHIL1cIKqdLA4=";
+    })
+    ({
+      owner = "ArthurSonzogni";
+      repo = "FTXUI";
+      rev = "f921fad208912747c17d129a8ef75ec7624b6eec"; # v7.0.3
+      hash = "sha256-hKdmzraAgKwvOGQXpglD9lm0465j92AAn2MhS9ZM4jA=";
+      dest = "third_party/ftxui";
+    })
+    # The core includes the guest-side ABI headers, so this is needed even
+    # when openbios itself is not built.
+    ({
+      owner = "pcsx-redux";
+      repo = "nugget";
+      rev = "4dc70d2931121a0fde858a0354192b6df4fa22e8";
+      hash = "sha256-YioP9cOBFRhqGZA5zaUlqJvMf6Pi0a8kIq3yAkHt0MY=";
+      dest = "src/mips";
+    })
+    ({
+      owner = "Taywee";
+      repo = "args";
+      rev = "794f2dc7caa306984cf385cbb8e7176146514959";
+      hash = "sha256-S5FaAtPY/mXsQ8aYsluxwwYZ1CK20/DRew3ltRkm2z8=";
+    })
   ] ++ lib.optional stdenv.hostPlatform.isAarch {
     owner = "grumpycoders";
     repo = "vixl";
     rev = "53ad192b26ddf6edd228a24ae1cffc363b442c01";
     hash = "sha256-p9Z2lFzhqnHnFWfqT6BIJBVw2ZpkVIxykhG3jUHXA84=";
-  } ++ lib.optional withOpenbios {
-    owner = "grumpycoders";
-    repo = "uC-sdk";
-    rev = "69e06871824e2d62069487a7426ded09090ceb69";
-    hash = "sha256-VamLhNtXxilcvd6ch76ronhB7DcKfw2eL7CuLwHFbp8=";
   };
 
-  fetchSubmodule = { owner, repo, rev, hash }@args:
-      "cp -ruT --no-preserve=all ${(fetchFromGitHub args).out} source/third_party/${repo}";
+  fetchSubmodule = { owner, repo, rev, hash, dest ? "third_party/${repo}" }@args:
+      "cp -ruT --no-preserve=all ${(fetchFromGitHub (removeAttrs args [ "dest" ])).out} ${dest}";
 
 in stdenv.mkDerivation {
   pname = "pcsx-redux";
   version = "0.99test";
   inherit src;
 
-  postUnpack = ''
-    cp -ruT --no-preserve=all ${miniaudio.out} source/third_party/miniaudio
-    cp -ruT --no-preserve=all ${tracy.src} source/third_party/tracy
+  preConfigure = ''
+    cp -ruT --no-preserve=all ${tracy.src} third_party/tracy
   '' + builtins.concatStringsSep "\n" (map fetchSubmodule submodules);
 
   nativeBuildInputs = [
@@ -146,11 +175,13 @@ in stdenv.mkDerivation {
     curl.dev
     zlib
     ffmpeg.dev
-    glfw3
+    sdl3
     capstone
     freetype.dev
     uriparser
     libX11
+    libxcb
+    libGL
     llhttp
   ];
 

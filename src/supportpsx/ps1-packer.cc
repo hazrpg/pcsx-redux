@@ -32,9 +32,10 @@ SOFTWARE.
 #include <exception>
 #include <vector>
 
-#include "mips/common/util/encoder.hh"
+#include "mips-common/util/encoder.hh"
 #include "n2e-d.h"
 #include "support/polyfills.h"
+#include "supportpsx/ucl-utils.h"
 #include "ucl/ucl.h"
 
 using namespace Mips::Encoder;
@@ -113,12 +114,17 @@ void PCSX::PS1Packer::pack(IO<File> src, IO<File> dest, uint32_t addr, uint32_t 
         newPC = tload + dataOut.size();
         compLoad = tload;
     } else if (!options.raw) {
-        // If we don't have a tload, it means we're doing
-        // in-place decompression. We need to make sure
-        // we have enough space to decompress our binary
-        // in-place, and ucl-nrv2e requires 16 bytes to
-        // ensure this property.
-        newPC = addr + dataIn.size() + 16;
+        // If we don't have a tload, it means we're doing in-place
+        // decompression. The compressed data has to sit far enough above the
+        // decompression target `addr` that the decompressor's write head never
+        // overtakes its read head. That distance is data-dependent, not a
+        // constant, so measure it exactly for this stream. (It used to be a
+        // hardcoded 16, which silently corrupts any payload whose worst-case
+        // match lands late enough to need more.)
+        size_t margin = UCLUtils::inPlaceOverlapMargin(dataOut.data(), outSize, dataIn.size());
+        size_t relMargin = margin - dataIn.size() + outSize;
+        relMargin = (relMargin + 3) & ~3;
+        newPC = addr + dataIn.size() + relMargin + 8;
         compLoad = newPC - dataOut.size();
         uint32_t rawCompLoad = compLoad & 0x1fffffff;
         if (rawCompLoad < 0x10000) {
@@ -140,7 +146,7 @@ void PCSX::PS1Packer::pack(IO<File> src, IO<File> dest, uint32_t addr, uint32_t 
         auto offset = newPC - 4 * 4;
         std::vector<uint8_t> stub;
         if (options.resetstack) {
-            pushBytes(stub, lui(Reg::SP, 0x8001));
+            pushBytes(stub, lui(Reg::SP, 0x807f));
         } else {
             pushBytes(stub, addiu(Reg::T8, Reg::RA, 0));
         }
@@ -152,7 +158,7 @@ void PCSX::PS1Packer::pack(IO<File> src, IO<File> dest, uint32_t addr, uint32_t 
         pushBytes(stub, andd(Reg::RA, Reg::T0));
         pushBytes(stub, lui(Reg::T0, 0x8000));
         pushBytes(stub, orr(Reg::RA, Reg::T0));
-        pushBytes(stub, addu(Reg::T0, Reg::T1));
+        pushBytes(stub, addu(Reg::T0, Reg::RA, Reg::T1));
         pushBytes(stub, jr(Reg::T0));
         pushBytes(stub, addiu(Reg::A0, Reg::RA, 32));
 
@@ -188,7 +194,7 @@ void PCSX::PS1Packer::pack(IO<File> src, IO<File> dest, uint32_t addr, uint32_t 
         // for the shell trick, since we're just going to reboot the machine.
         pushBytes(dataOut, addiu(Reg::T8, Reg::RA, 0));
     } else if (options.resetstack && !options.raw) {
-        pushBytes(dataOut, lui(Reg::SP, 0x8001));
+        pushBytes(dataOut, lui(Reg::SP, 0x807f));
     }
     // Kill interrupts by setting IMASK to 0.
     pushBytes(dataOut, lui(Reg::V1, 0x1f80));
@@ -410,7 +416,7 @@ void PCSX::PS1Packer::pack(IO<File> src, IO<File> dest, uint32_t addr, uint32_t 
         pushBytes(header, mtc0(Reg::R0, 7));
         pushBytes(header, li(Reg::T2, -1));
         pushBytes(header, lui(Reg::T1, 0x8003));
-        pushBytes(header, lui(Reg::T0, 0b1100101010000000));
+        pushBytes(header, lui(Reg::T0, 0b1110101110000000));
         pushBytes(header, mtc0(Reg::T2, 11));
         pushBytes(header, mtc0(Reg::T2, 9));
         pushBytes(header, mtc0(Reg::T1, 5));

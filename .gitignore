@@ -39,12 +39,22 @@ deps/
 objs/
 bins/
 /pcsx-redux
+/pcsx-redux-tests
 /authoring
 /exe2elf
+/exe2exe
 /exe2iso
+/mdec
+/exe2sys573
+/midi2psm
+/midi2spd
 /modconv
 /ps1-packer
 /psyq-obj-parser
+/pcsx-redux-tests
+
+# PCDRV test leftover
+/testfile
 
 # Temporary files from pcsx itself
 pcsx.json
@@ -110,8 +120,14 @@ sstate.proto
 # Sentry Native files
 .sentry-native
 
-# NOPS leftovers
+# nops' configuration file
 comport.txt
+
+# Cue sheets.
+*.cue
+
+# Various editors' backup files
+*.bak
 
 # NVIDIA Nsight
 GPUCache
@@ -130,3 +146,14 @@ luacov.stats.out
 /AppDir
 /*.AppImage
 /*.AppImage.zsync
+
+# xmake
+.xmake/
+build/
+
+# gtest objects are built next to their sources
+tests/**/*.o
+
+# Objects from the shared MIPS/host util sources, built by the guest toolchain.
+src/mips-common/**/*.o
+src/mips-common/**/*.dep

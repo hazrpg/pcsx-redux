@@ -28,6 +28,7 @@
 #include "core/psxemulator.h"
 #include "core/psxmem.h"
 #include "core/r3000a.h"
+#include "core/ramlogger.h"
 #include "supportpsx/memory.h"
 
 enum {
@@ -157,6 +158,17 @@ void PCSX::Debug::process(uint32_t oldPC, uint32_t newPC, uint32_t oldCode, uint
         if (isJALR) markMap(regs.GPR.r[rd], MAP_EXEC_JAL);
     }
 
+    // RAM logger: record execution
+    auto* ramLogger = g_emulator->m_ramLogger.get();
+    const bool ramLoggerEnabled = ramLogger->isEnabled();
+    const uint32_t cycle = static_cast<uint32_t>(regs.cycle);
+    if (ramLoggerEnabled) {
+        PSXAddress pcAddr(normalizeAddress(newPC));
+        if (pcAddr.type == PSXAddress::Type::RAM) {
+            ramLogger->recordAccess(pcAddr.physical, 4, RAMLogger::AccessType::Execute, cycle);
+        }
+    }
+
     // Are we jumping from a non-kernel address to a kernel address which:
     // - is not a jr to $ra (aka a return from a callback)
     // - is not a jump to 0xa0 / 0xb0 / 0xc0 (aka the syscall gates)
@@ -212,6 +224,20 @@ void PCSX::Debug::process(uint32_t oldPC, uint32_t newPC, uint32_t oldCode, uint
                 triggerBP(nullptr, offset, 4, _("Write 32 map"));
             }
             if (m_mapping_w32) markMap(offset, MAP_W32);
+        }
+        // RAM logger: record loads and stores
+        if (ramLoggerEnabled) {
+            PSXAddress loadStoreAddr(normalizeAddress(offset));
+            if (loadStoreAddr.type == PSXAddress::Type::RAM) {
+                if (isLoad) {
+                    unsigned width = (isLB || isLBU) ? 1 : (isLH || isLHU) ? 2 : 4;
+                    ramLogger->recordAccess(loadStoreAddr.physical, width, RAMLogger::AccessType::Read, cycle);
+                }
+                if (isStore) {
+                    unsigned width = isSB ? 1 : isSH ? 2 : 4;
+                    ramLogger->recordAccess(loadStoreAddr.physical, width, RAMLogger::AccessType::Write, cycle);
+                }
+            }
         }
         // Are we accessing a kernel address from a non-kernel address, while not in IRQ?
         if (!g_emulator->m_cpu->m_inISR && offsetIsInKernel && !wasInKernel) {
@@ -292,15 +318,28 @@ bool PCSX::Debug::triggerBP(Breakpoint* bp, uint32_t address, unsigned width, co
     return keepBP;
 }
 
+void PCSX::Debug::logDMAAccess(uint32_t address, uint32_t len, bool isWrite) {
+    auto* ramLogger = g_emulator->m_ramLogger.get();
+    if (!ramLogger->isEnabled()) return;
+    PSXAddress addr(normalizeAddress(address));
+    if (addr.type != PSXAddress::Type::RAM) return;
+    uint32_t cycle = static_cast<uint32_t>(g_emulator->m_cpu->m_regs.cycle);
+    auto type = isWrite ? RAMLogger::AccessType::Write : RAMLogger::AccessType::Read;
+    ramLogger->recordAccess(addr.physical, len, type, cycle);
+}
+
 void PCSX::Debug::checkBP(uint32_t address, BreakpointType type, uint32_t width, const char* cause) {
     auto& cpu = g_emulator->m_cpu;
     auto& regs = cpu->m_regs;
 
     if (m_scheduledCop0.has_value()) {
-        regs.pc = std::get<uint32_t>(m_scheduledCop0.value());
+        regs.pc.raw() = std::get<uint32_t>(m_scheduledCop0.value());
         cpu->exception(R3000Acpu::Exception::Break, std::get<bool>(m_scheduledCop0.value()), true);
         m_scheduledCop0.reset();
-    } else if ((regs.CP0.n.DCIC & 0xc0800000) == 0xc0800000) {
+    } else if (((regs.CP0.n.DCIC & 0x80800000) == 0x80800000) &&
+               (regs.CP0.n.DCIC & ((address & 0x80000000) ? 0x20000000 : 0x40000000))) {
+        // KD gates accesses to kseg addresses and UD to kuseg ones. Measured with the CPU in
+        // kernel mode: a kuseg write breaks on UD alone, a kseg0 write only with KD set.
         if (type == BreakpointType::Exec && ((regs.CP0.n.DCIC & 0x01000000) == 0x01000000)) {
             if (((regs.CP0.n.BPC ^ address) & regs.CP0.n.BPCM) == 0) {
                 m_scheduledCop0.emplace(regs.pc, cpu->m_inDelaySlot);

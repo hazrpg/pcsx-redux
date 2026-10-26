@@ -39,7 +39,7 @@ PCSX::Widgets::GPULogger::GPULogger(bool& show) : m_show(show), m_listener(g_sys
     });
 }
 
-void PCSX::Widgets::GPULogger::draw(PCSX::GPULogger* logger, const char* title) {
+void PCSX::Widgets::GPULogger::draw(PCSX::GPULogger* logger, const char* title, bool replayAllowed) {
     if (!ImGui::Begin(title, &m_show, ImGuiWindowFlags_MenuBar)) {
         ImGui::End();
         return;
@@ -57,8 +57,7 @@ void PCSX::Widgets::GPULogger::draw(PCSX::GPULogger* logger, const char* title) 
                                     colorFormat == GPU::Logged::DrawLogSettings::ColorFormat::Expanded)) {
                     colorFormat = GPU::Logged::DrawLogSettings::ColorFormat::Expanded;
                 }
-                if (ImGui::MenuItem(_("HTML"), nullptr,
-                                    colorFormat == GPU::Logged::DrawLogSettings::ColorFormat::HTML)) {
+                if (ImGui::MenuItem("HTML", nullptr, colorFormat == GPU::Logged::DrawLogSettings::ColorFormat::HTML)) {
                     colorFormat = GPU::Logged::DrawLogSettings::ColorFormat::HTML;
                 }
                 ImGui::EndMenu();
@@ -79,10 +78,12 @@ void PCSX::Widgets::GPULogger::draw(PCSX::GPULogger* logger, const char* title) 
         _("Logs each frame's draw calls. When enabled, all the commands sent to the GPU will be logged and displayed "
           "here. This will contain only a single frame worth of commands. The feature can be pretty demanding in CPU "
           "and memory."));
-    ImGui::Checkbox(_("Breakpoint on vsync"), &logger->m_breakOnVSync);
-    ImGui::SameLine();
-    if (ImGui::Button(_("Resume"))) {
-        g_system->resume();
+    if (logger->followsEmulator()) {
+        ImGui::Checkbox(_("Breakpoint on vsync"), &logger->m_breakOnVSync);
+        ImGui::SameLine();
+        if (ImGui::Button(C_("Emulation", "Resume"))) {
+            g_system->resume();
+        }
     }
     ImGui::Checkbox(_("Replay frame"), &m_replay);
     ImGuiHelpers::ShowHelpMarker(
@@ -142,6 +143,42 @@ void PCSX::Widgets::GPULogger::draw(PCSX::GPULogger* logger, const char* title) 
         "When enabled, hovering then clicking inside the VRAM viewer will set the pixel location for the filtering."));
 
     std::string label;
+
+    ImGui::Separator();
+    // Breakpoints pause the emulator, so they only make sense on the emulator's own logger.
+    if (logger->followsEmulator() && ImGui::TreeNode(_("VRAM breakpoints"))) {
+        ImGuiHelpers::ShowHelpMarker(
+            _("Pauses emulation when a command reads from or writes to one of these VRAM rectangles. Handy to catch "
+              "the texture upload that stomped an area, since those are hard to spot in a frame that redraws "
+              "everything. The command that triggered gets highlighted in the logger view below. Note the footprints "
+              "are unclipped, so a primitive that ends up entirely outside the drawing area still counts as a write."));
+        if (ImGui::Button(_("Add breakpoint"))) {
+            logger->m_vramBreakpoints.emplace_back();
+        }
+        if (!logger->m_vramBreakpoints.empty()) {
+            ImGui::TextUnformatted(_("Enable, then X, Y, width, height:"));
+        }
+        unsigned toRemove = logger->m_vramBreakpoints.size();
+        for (unsigned i = 0; i < logger->m_vramBreakpoints.size(); i++) {
+            auto& bp = logger->m_vramBreakpoints[i];
+            ImGui::PushID(i);
+            ImGui::Checkbox("##enabled", &bp.enabled);
+            ImGui::SameLine();
+            ImGui::SetNextItemWidth(ImGui::GetFontSize() * 16.0f);
+            ImGui::InputInt4("##area", bp.area.raw);
+            ImGui::SameLine();
+            ImGui::Checkbox(_("Read"), &bp.onRead);
+            ImGui::SameLine();
+            ImGui::Checkbox(_("Write"), &bp.onWrite);
+            ImGui::SameLine();
+            if (ImGui::Button(_("Remove"))) toRemove = i;
+            ImGui::PopID();
+        }
+        if (toRemove != logger->m_vramBreakpoints.size()) {
+            logger->m_vramBreakpoints.erase(logger->m_vramBreakpoints.begin() + toRemove);
+        }
+        ImGui::TreePop();
+    }
 
     ImGui::Separator();
     label = fmt::format(f_("Frame {}###FrameCounterNode"), logger->m_frameCounter - m_frameCounterOrigin);
@@ -210,7 +247,7 @@ void PCSX::Widgets::GPULogger::draw(PCSX::GPULogger* logger, const char* title) 
                         break;
                 }
                 ImGui::SameLine();
-                ImGui::TextUnformatted(_("at PC = "));
+                ImGui::TextUnformatted(_("at PC ="));
                 ImGui::SameLine();
                 label = fmt::format("{:08x}", logged.pc);
                 if (ImGui::Button(label.c_str())) {
@@ -269,8 +306,8 @@ void PCSX::Widgets::GPULogger::draw(PCSX::GPULogger* logger, const char* title) 
     ImGui::EndChild();
     ImGui::End();
 
-    if (m_replay && !g_system->running()) {
-        logger->replay(g_emulator->m_gpu.get());
+    if (m_replay && replayAllowed) {
+        logger->replay(logger->gpu());
     }
 
     logger->highlight(tempHighlight, tempHighlight && ImGui::GetIO().KeyCtrl);

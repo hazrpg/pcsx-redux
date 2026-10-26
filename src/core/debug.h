@@ -35,21 +35,25 @@ class Debug {
     Debug();
     static uint32_t normalizeAddress(uint32_t address);
     static bool isInKernel(uint32_t address, bool biosIsKernel = true);
-    static inline std::function<const char*()> s_breakpoint_type_names[] = {l_("Exec"), l_("Read"), l_("Write")};
+    static inline std::function<const char*()> s_breakpoint_type_names[] = {
+        lC_("Breakpoint type", "Exec"), lC_("Breakpoint type", "Read"), lC_("Breakpoint type", "Write")};
     enum class BreakpointType { Exec, Read, Write };
     enum class BreakpointCondition { Always, Change, Greater, Less, Equal };
 
     void checkDMAread(unsigned c, uint32_t address, uint32_t len) {
         std::string cause = fmt::format("DMA channel {} read", c);
         checkBP(address, BreakpointType::Read, len, cause.c_str());
+        logDMAAccess(address, len, false);
     }
     void checkDMAwrite(unsigned c, uint32_t address, uint32_t len) {
         std::string cause = fmt::format("DMA channel {} write", c);
         checkBP(address, BreakpointType::Write, len, cause.c_str());
+        logDMAAccess(address, len, true);
     }
 
   private:
     void checkBP(uint32_t address, BreakpointType type, uint32_t width, const char* cause = "");
+    void logDMAAccess(uint32_t address, uint32_t len, bool isWrite);
 
   public:
     // call this if PC is being set, like when the emulation is being reset, or when doing fastboot

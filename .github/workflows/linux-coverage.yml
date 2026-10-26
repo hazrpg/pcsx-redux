@@ -6,15 +6,19 @@ on:
       - main
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   coverage:
     runs-on: ubuntu-latest
     container:
-      image: ghcr.io/grumpycoders/pcsx-redux-build:latest
+      image: ghcr.io/pcsx-redux/pcsx-redux-build:latest
       env:
         TEST_RESULTS: /tmp/test-results
         BUILD: Coverage
-        CPPFLAGS: -Werror=format-security
+        CPPFLAGS: -Wformat -Werror=format-security
     steps:
       - name: Update lcov, because https://bugs.launchpad.net/ubuntu/+source/lcov/+bug/2029924
         run: |
@@ -25,20 +29,22 @@ jobs:
           tar xf lcov-2.0.tar.gz
           cd lcov-2.0
           make install
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
-          submodules: recursive
           set-safe-directory: true
-      - uses: n1hility/cancel-previous-runs@v2
-        with:
-          token: ${{ secrets.GITHUB_TOKEN }}
+      - name: Fetch submodules
+        run: ./.github/scripts/update-submodules.sh
       - run: |
           make -j 2 all pcsx-redux-tests
-          make -C src/mips/openbios -j 2
+          make -C src/mips/openbios -j 2 BUILD=Release
           cp src/mips/openbios/openbios.bin .
+      - run: |
           make -C src/mips/openbios clean
-          make -C src/mips/tests -j 2 PCSX_TESTS=true
+          make -C src/mips/tests -j 2 PCSX_TESTS=true BUILD=Release
           cp ./openbios.bin src/mips/openbios/
+      - run: |
+          make -C src/mips/monitor/hosts/retail -j 2 BUILD=LTO
+          xvfb-run catchsegv ./pcsx-redux -stdout -lua_stdout -testmode -no-gui-log -exec "dofile 'src/mips/tests/cdrom/create-test-iso.lua'"
       - name: Test
         run: |
           xvfb-run catchsegv ./pcsx-redux-tests

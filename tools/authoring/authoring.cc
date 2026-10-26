@@ -27,20 +27,22 @@
 #include <thread>
 #include <vector>
 
-#include "flags.h"
+#include "args/args.hxx"
 #include "fmt/format.h"
 #include "json.hpp"
-#include "mips/common/util/bitfield.hh"
+#include "mips-common/util/bitfield.hh"
 #include "support/container-file.h"
 #include "support/djbhash.h"
 #include "support/file.h"
 #include "support/mem4g.h"
 #include "support/polyfills.h"
+#include "support/tool-args.h"
 #include "supportpsx/binloader.h"
 #include "supportpsx/iec-60908b.h"
 #include "supportpsx/iso9660-builder.h"
 #include "supportpsx/iso9660-lowlevel.h"
 #include "supportpsx/ps1-packer.h"
+#include "supportpsx/ucl-utils.h"
 #include "ucl/ucl.h"
 
 template <PCSX::PolyFill::IntegralConcept T, std::endian endianess = std::endian::little>
@@ -91,12 +93,20 @@ union IndexEntry {
 static_assert(sizeof(IndexEntry) == 16);
 
 int main(int argc, char** argv) {
-    CommandLine::args args(argc, argv);
-    const auto output = args.get<std::string>("o");
-    const auto inputs = args.positional();
-    const auto license = args.get<std::string>("license");
-    const bool asksForHelp = !!args.get<bool>("h");
-    const bool quiet = !!args.get<bool>("q");
+    args::ArgumentParser parser("");
+    args::ValueFlag<std::string> outputFlag(parser, "output", "", {"o"});
+    args::ValueFlag<std::string> basedirFlag(parser, "basedir", "", {"basedir"});
+    args::ValueFlag<std::string> licenseFlag(parser, "license", "", {"license"});
+    args::ValueFlag<unsigned> threadsFlag(parser, "threads", "", {"threads"});
+    args::Flag quietFlag(parser, "quiet", "", {"q"});
+    args::Flag helpFlag(parser, "help", "", {"h"});
+    args::PositionalList<std::string> inputsList(parser, "inputs", "");
+    PCSX::ToolArgs::parse(parser, argc, argv);
+    const auto output = PCSX::ToolArgs::get(outputFlag);
+    const auto inputs = args::get(inputsList);
+    const auto license = PCSX::ToolArgs::get(licenseFlag);
+    const bool asksForHelp = args::get(helpFlag);
+    const bool quiet = args::get(quietFlag);
     const bool hasOutput = output.has_value();
     const bool hasExactlyOneInput = inputs.size() == 1;
 
@@ -117,7 +127,7 @@ Usage: {} input.json [-h] -o output.bin
 
     auto input = inputs[0];
     const std::filesystem::path basePath =
-        args.get<std::string>("basedir", std::filesystem::path(input).parent_path().string());
+        PCSX::ToolArgs::get(basedirFlag).value_or(std::filesystem::path(input).parent_path().string());
     PCSX::IO<PCSX::File> indexFile(new PCSX::PosixFile(input));
     if (indexFile->failed()) {
         fmt::print("Unable to open file: {}\n", input);
@@ -165,7 +175,7 @@ Usage: {} input.json [-h] -o output.bin
         }
     }
 
-    const unsigned threadCount = args.get<unsigned>("threads", std::thread::hardware_concurrency());
+    const unsigned threadCount = PCSX::ToolArgs::get(threadsFlag).value_or(std::thread::hardware_concurrency());
 
     nlohmann::json pvdData = nlohmann::json::object();
     if (indexData.contains("pvd") && indexData["pvd"].is_object()) {
@@ -230,6 +240,7 @@ Usage: {} input.json [-h] -o output.bin
 
     const unsigned executableSectorsCount = compressedExecutable->size() / 2048;
     unsigned currentSector = 23 + indexSectorsCount;
+    std::atomic<uint32_t> maxMargin;
 
     for (unsigned i = 0; i < executableSectorsCount; i++) {
         auto sector = compressedExecutable.asA<PCSX::BufferFile>()->borrow(i * 2048);
@@ -246,6 +257,7 @@ Usage: {} input.json [-h] -o output.bin
         std::binary_semaphore semaphore;
         std::vector<uint8_t> sectorData;
         nlohmann::json fileInfo;
+        uint32_t margin;
         bool failed;
     };
     static WorkUnit work[c_maximumSectorCount];
@@ -305,6 +317,16 @@ Usage: {} input.json [-h] -o output.bin
                     workUnit.semaphore.release();
                     continue;
                 }
+
+                ssize_t margin = PCSX::UCLUtils::inPlaceOverlapMargin(dataOut.data() + 2048, outSize, size);
+                ssize_t relMargin = margin - size + outSize;
+                workUnit.margin =
+                    std::clamp<uint32_t>(relMargin, 0L, static_cast<long>(std::numeric_limits<uint32_t>::max()));
+                do {
+                    auto oldOverlap = maxMargin.load();
+                    if (workUnit.margin <= oldOverlap) break;
+                    if (maxMargin.compare_exchange_weak(oldOverlap, workUnit.margin)) break;
+                } while (1);
 
                 unsigned compressedSectorsCount = (outSize + 2047) / 2048;
 
@@ -368,6 +390,7 @@ Usage: {} input.json [-h] -o output.bin
             fmt::print("  Compressed size: {}\n", entry->getCompressedSize() * 2048);
             fmt::print("  Compression method: {}\n", static_cast<uint32_t>(entry->getCompressionMethod()));
             fmt::print("  Sector offset: {}\n", currentSector);
+            fmt::print("  Margin: {}\n", workUnit.margin);
         }
         entry->setSectorOffset(currentSector);
         unsigned sectorCount = entry->getCompressedSize();
@@ -380,6 +403,7 @@ Usage: {} input.json [-h] -o output.bin
 
     if (!quiet) {
         fmt::print("Processed {} files.\n", filesCount);
+        fmt::print("Maximum margin: {}\n", maxMargin.load());
     }
 
     uint8_t empty[2048] = {0};
@@ -398,7 +422,9 @@ Usage: {} input.json [-h] -o output.bin
     indexEntryDataBuffer[5] = 'R';
     indexEntryDataBuffer[6] = 'C';
     indexEntryDataBuffer[7] = '1';
+    uint32_t maxMarginValue = maxMargin.load() >> 4;
     writeToBuffer(indexEntryDataBuffer.get() + 8, filesCount);
+    writeToBuffer<uint8_t>(indexEntryDataBuffer.get() + 11, maxMarginValue);
     writeToBuffer(indexEntryDataBuffer.get() + 12, totalSectorCount);
     std::sort(indexEntryData.begin(), indexEntryData.end(),
               [](const IndexEntry& a, const IndexEntry& b) { return a.hash < b.hash; });

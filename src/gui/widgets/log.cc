@@ -19,7 +19,7 @@
 
 #include "gui/widgets/log.h"
 
-#include <magic_enum_all.hpp>
+#include <magic_enum/magic_enum_all.hpp>
 
 #include "core/logger.h"
 #include "core/psxemulator.h"
@@ -108,10 +108,8 @@ bool PCSX::Widgets::Log::draw(GUI* gui, const char* title) {
             auto& debugSettings = g_emulator->settings.get<Emulator::SettingDebugSettings>();
             changed |= ImGui::MenuItem(_("Log CD-ROM commands"), nullptr,
                                        &debugSettings.get<Emulator::DebugSettings::LoggingCDROM>().value);
-            changed |=
-                ImGui::MenuItem(_("CPU trace"), nullptr, &debugSettings.get<Emulator::DebugSettings::Trace>().value);
-            changed |= ImGui::MenuItem(_("Skip ISR during CPU traces"), nullptr,
-                                       &debugSettings.get<Emulator::DebugSettings::SkipISR>().value);
+            changed |= ImGui::MenuItem(_("Log CD-ROM hardware access"), nullptr,
+                                       &debugSettings.get<Emulator::DebugSettings::LoggingHWCDROM>().value);
             changed |= ImGui::MenuItem(_("Log kernel calls"), nullptr,
                                        &debugSettings.get<Emulator::DebugSettings::KernelLog>().value);
             ImGui::PopItemFlag();

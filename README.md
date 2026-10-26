@@ -4,9 +4,10 @@
 
 |Platform|Build status|Download|
 |--------|------------|--------|
-|Windows x64 build|[![Windows x64 CI](https://dev.azure.com/grumpycoders/pcsx-redux/_apis/build/status/grumpycoders.pcsx-redux?branchName=main)](https://dev.azure.com/grumpycoders/pcsx-redux/_build/latest?definitionId=1&branchName=main)|[Windows Intel 64-bits](https://distrib.app/pub/org/pcsx-redux/project/dev-win-x64)|
-|Linux x64 build|[![Linux x64 CI](https://github.com/grumpycoders/pcsx-redux/workflows/Linux%20CI/badge.svg?branch=main)](https://github.com/grumpycoders/pcsx-redux/actions?query=workflow%3A%22Linux+CI%22+branch%3Amain)|[Linux Intel 64-bits (AppImage)](https://distrib.app/pub/org/pcsx-redux/project/dev-linux-x64)|
-|MacOS x64 build|[![MacOS x64 CI](https://github.com/grumpycoders/pcsx-redux/workflows/macOS%20CI/badge.svg?branch=main)](https://github.com/grumpycoders/pcsx-redux/actions?query=workflow%3A%22macOS+CI%22+branch%3Amain)|[MacOS Intel](https://distrib.app/pub/org/pcsx-redux/project/dev-macos-x64)|
+|Windows x64 build|[![Windows x64 CI](https://dev.azure.com/grumpycoders/pcsx-redux/_apis/build/status/pcsx-redux%20Windows%20build?branchName=main)](https://dev.azure.com/grumpycoders/pcsx-redux/_build/latest?definitionId=1&branchName=main)|[Windows Intel 64-bits](https://distrib.app/pub/org/pcsx-redux/project/dev-win-x64)|
+|Linux x64 build|[![Linux x64 CI](https://github.com/pcsx-redux/pcsx-redux/workflows/Linux%20CI/badge.svg?branch=main)](https://github.com/pcsx-redux/pcsx-redux/actions?query=workflow%3A%22Linux+CI%22+branch%3Amain)|[Linux Intel 64-bits (AppImage)](https://distrib.app/pub/org/pcsx-redux/project/dev-linux-x64)|
+|Linux arm64 build|[![Linux arm64 CI](https://github.com/pcsx-redux/pcsx-redux/workflows/Linux%20CI/badge.svg?branch=main)](https://github.com/pcsx-redux/pcsx-redux/actions?query=workflow%3A%22Linux+CI%22+branch%3Amain)|[Linux Arm 64-bits (AppImage)](https://distrib.app/pub/org/pcsx-redux/project/dev-linux-arm64)|
+|macOS build|[![macOS CI](https://github.com/pcsx-redux/pcsx-redux/workflows/macOS%20CI/badge.svg?branch=main)](https://github.com/pcsx-redux/pcsx-redux/actions?query=workflow%3A%22macOS+CI%22+branch%3Amain)|[macOS Arm](https://distrib.app/pub/org/pcsx-redux/project/dev-macos-arm)|
 
 To discuss this emulator specifically, please join our Discord server:
 
@@ -29,7 +30,7 @@ The PCSX-Redux project is a collection of tools, research, hardware design, and 
 
 Please consult [the documentation pages](https://pcsx-redux.consoledev.net) for more information on the emulator itself.
 
-The [tools](tools) directory contains a few tools that can be used to work with PlayStation 1 software. The [wiki](https://github.com/grumpycoders/pcsx-redux/wiki) directory contains a few research information that are not directly related to the emulator itself. The [mips](src/mips) directory contains various pieces of code targeting the PlayStation 1, and importantly, the OpenBIOS project, which is a MIPS R3000A BIOS implementation that can be used to boot PlayStation 1 games without the need for a retail BIOS. And the [hardware](hardware) directory contains various hardware designs that can be used with the PlayStation 1.
+The [tools](tools) directory contains a few tools that can be used to work with PlayStation 1 software. The [wiki](https://github.com/pcsx-redux/pcsx-redux/wiki) directory contains a few research information that are not directly related to the emulator itself. The [mips](src/mips) directory contains various pieces of code targeting the PlayStation 1, and importantly, the OpenBIOS project, which is a MIPS R3000A BIOS implementation that can be used to boot PlayStation 1 games without the need for a retail BIOS. And the [hardware](hardware) directory contains various hardware designs that can be used with the PlayStation 1.
 
 ## Where?
 |Download page|
@@ -37,8 +38,10 @@ The [tools](tools) directory contains a few tools that can be used to work with 
 |[Windows Intel 64-bits](https://distrib.app/pub/org/pcsx-redux/project/dev-win-x64)|
 |[Windows Intel 64-bits CLI](https://distrib.app/pub/org/pcsx-redux/project/dev-win-cli-x64)|
 |[Linux Intel 64-bits (AppImage)](https://distrib.app/pub/org/pcsx-redux/project/dev-linux-x64)|
-|[MacOS Intel](https://distrib.app/pub/org/pcsx-redux/project/dev-macos-x64)|
+|[Linux Arm 64-bits (AppImage)](https://distrib.app/pub/org/pcsx-redux/project/dev-linux-arm64)|
 |[MacOS Arm](https://distrib.app/pub/org/pcsx-redux/project/dev-macos-arm)|
+
+All builds are 64-bit only, and need a GPU and driver that can create at least an OpenGL 3.0 context. The emulator asks for a 3.3 core profile first and falls back to 3.0 if that fails.
 
 ### Note:
 The macOS version of PCSX-Redux is not currently signed with a developer certificate so you may see a security warning when opening the application.
@@ -54,13 +57,13 @@ You can allow the application to run by doing either of the following. You only 
 - Alternatively, go to macOS Settings > Privacy & Security. Scroll down to see a section that will let you allow the app.
 
 ## How?
-The code is meant to be built using very modern compilers. Also it's still fairly experimental, and lots of things can break. If you still want to proceed, here are instructions to build it on Linux, MacOS and Windows. The code now comes in two big parts: the emulator itself, and [OpenBIOS](https://github.com/grumpycoders/pcsx-redux/tree/main/src/mips/openbios), which can be used as an alternative to the retail, copyright protected BIOS.
+The code is meant to be built using very modern compilers. Also it's still fairly experimental, and lots of things can break. If you still want to proceed, here are instructions to build it on Linux, MacOS and Windows. The code now comes in two big parts: the emulator itself, and [OpenBIOS](https://github.com/pcsx-redux/nugget/tree/main/openbios), which can be used as an alternative to the retail, copyright protected BIOS.
 
 ### Getting sources
-The only location for the source is [on GitHub](https://github.com/grumpycoders/pcsx-redux/).
+The only location for the source is [on GitHub](https://github.com/pcsx-redux/pcsx-redux/).
 Clone recursively, as the project uses submodules:
 ```
-git clone --recursive https://github.com/grumpycoders/pcsx-redux.git
+git clone --recursive https://github.com/pcsx-redux/pcsx-redux.git
 ```
 
 ### Windows
@@ -77,7 +80,7 @@ powershell -c "& { iwr -UseBasicParsing https://bit.ly/mips-ps1 | iex }"
 Then, open a new command prompt, and type the following:
 
 ```
-mips install 14.2.0
+mips install 16.2.0
 ```
 
 To manually install this script, you can download it from [here](https://bit.ly/mips-ps1), and then install it with the following command:
@@ -91,16 +94,23 @@ You can leave the installation path blank to install the script in the Applicati
 Once the toolchain is installed, you can compile OpenBIOS using `make -C src/mips/openbios`.
 
 ### Linux
-Run `./dockermake.sh appimage`. You need [docker](https://en.wikipedia.org/wiki/Docker_(software)) for this to work. This will create an [AppImage](https://appimage.org/) file, called `PCSX-Redux-HEAD-x86_64.AppImage`, which a self-hosted binary containing all of its required dependencies. Alternatively, if you do not want to use Docker, you can also simply install the dependencies listed below and run `make`.
+Run `./dockermake.sh appimage`. You need [docker](https://en.wikipedia.org/wiki/Docker_(software)) for this to work. This will create an [AppImage](https://appimage.org/) file, called `PCSX-Redux-HEAD-x86_64.AppImage` or `PCSX-Redux-HEAD-aarch64.AppImage` depending on your machine, which a self-hosted binary containing all of its required dependencies. Alternatively, if you do not want to use Docker, you can also simply install the dependencies listed below and run `make`.
 
 #### GNU/Linux Dependencies
 
-If you're only interested in compiling psx code, you can simply clone the pcsx-redux repo, then install `g++-mipsel-linux-gnu cpp-mipsel-linux-gnu binutils-mipsel-linux-gnu` then follow the instructions in `/pcsx-redux/src/mips/psyq/README.md` to convert the PsyQ libraries. You might find them pre-compiled online.
+If you're only interested in compiling psx code, you can simply clone the pcsx-redux repo, then build the mips toolchain with [this script](https://github.com/pcsx-redux/pcsx-redux/blob/main/tools/linux-mips/spawn-compiler.sh), then follow the instructions in `/pcsx-redux/src/mips/psyq/README.md` to convert the PsyQ libraries. You might find them pre-compiled online.
 
  - Debian derivatives ( for full emulator compilation ):
 
 ```bash
-sudo apt-get install -y build-essential git make pkg-config clang g++ g++-mipsel-linux-gnu cpp-mipsel-linux-gnu binutils-mipsel-linux-gnu libcapstone-dev libfreetype-dev libavcodec-dev libavformat-dev libavutil-dev libcurl4-openssl-dev libglfw3-dev libswresample-dev libuv1-dev zlib1g-dev
+sudo apt-get install -y build-essential git make pkg-config clang g++ libcapstone-dev libfreetype-dev libavcodec-dev libavformat-dev libavutil-dev libcurl4-openssl-dev libsdl3-dev libswresample-dev libuv1-dev zlib1g-dev
+```
+
+The mips toolchain isn't packaged by Debian or Ubuntu, so build it from source:
+
+```bash
+sudo apt-get install -y wget bzip2 xz-utils bison flex texinfo libgmp-dev libmpfr-dev libmpc-dev
+sudo bash tools/linux-mips/spawn-compiler.sh
 ```
 
  - Arch derivatives :
@@ -114,25 +124,23 @@ paru -S pcsx-redux-git
 Alternatively, the following steps describe how to install dependencies and compile manually:
 
 ```bash
-sudo pacman -S --needed capstone clang git make pkg-config ffmpeg libuv zlib glfw-x11 curl xorg-server-xvfb imagemagick
+sudo pacman -S --needed capstone clang git make pkg-config ffmpeg libuv zlib sdl3 curl xorg-server-xvfb imagemagick
 ```
-The mipsel environment can be installed from [AUR](https://wiki.archlinux.org/index.php/Aur) : [cross-mipsel-linux-gnu-binutils](https://aur.archlinux.org/packages/cross-mipsel-linux-gnu-binutils/) and [cross-mipsel-linux-gnu-gcc](https://aur.archlinux.org/packages/cross-mipsel-linux-gnu-gcc/) using your [AURhelper](https://wiki.archlinux.org/index.php/AUR_helpers) of choice:
+The mipsel environment can be installed from [AUR](https://wiki.archlinux.org/index.php/Aur) : [mipsel-none-elf-binutils](https://aur.archlinux.org/packages/mipsel-none-elf-binutils/) and [mipsel-none-elf-gcc](https://aur.archlinux.org/packages/mipsel-none-elf-gcc/) using your [AURhelper](https://wiki.archlinux.org/index.php/AUR_helpers) of choice:
 
 ```bash
-trizen -S cross-mipsel-linux-gnu-binutils cross-mipsel-linux-gnu-gcc
+trizen -S mipsel-none-elf-binutils mipsel-none-elf-gcc
 ```
 You can then just enter the 'pcsx-redux' directory and compile without using docker with `make`.
 
-Building OpenBIOS on Linux can be done with `./dockermake.sh -C src/mips/openbios`, or using the `g++-mipsel-linux-gnu` package with `make -C src/mips/openbios`. If you have a different mips compiler, you'll need to override some variables, such as `PREFIX=mipsel-none-elf FORMAT=elf32-littlemips`.
+Building OpenBIOS on Linux can be done with `./dockermake.sh -C src/mips/openbios`, or with `make -C src/mips/openbios` once you have a mipsel-none-elf toolchain. If you have a different mips compiler, you'll need to override some variables, such as `PREFIX` and `FORMAT`.
 
 ### MacOS
-You need MacOS Catalina or later with the latest XCode to build, as well as a few [homebrew](https://brew.sh/) packages. Run the [brew installation script](https://github.com/grumpycoders/pcsx-redux/blob/main/.github/scripts/install-brew-dependencies.sh) to get all the necessary dependencies. Simply run `make` to build.
+You need MacOS Catalina or later with the latest XCode to build, as well as a few [homebrew](https://brew.sh/) packages. Run the [brew installation script](https://github.com/pcsx-redux/pcsx-redux/blob/main/.github/scripts/install-brew-dependencies.sh) to get all the necessary dependencies. Simply run `make` to build.
 
-Compiling OpenBIOS will require a mips compiler, that you can generate using the following commands:
+Compiling OpenBIOS will require a mips compiler, which you can install from our [Homebrew tap](https://github.com/pcsx-redux/homebrew-mips):
 ```bash
-brew install nikitabobko/tap/brew-install-path
-brew install-path ./tools/macos-mips/mipsel-none-elf-binutils.rb
-brew install-path ./tools/macos-mips/mipsel-none-elf-gcc.rb
+brew install pcsx-redux/mips/mipsel-none-elf-gcc
 ```
 
 Then, you can compile OpenBIOS using `make -C ./src/mips/openbios`.
@@ -146,7 +154,7 @@ Since the inception of this codebase, several people have contributed to it. Ple
 When Sony released the Playstation Classic recently, I came to realize two things: first, the state of the Playstation emulation isn't that great, and second, the only half-decent debugging tool still available for this console is that old telnet debugger I wrote eons ago, while other emulators out there for other consoles gained a lot of debugging superpowers. I think it was time for the Playstation emulation to get to better standards with regards to debuggability. I also felt I had a responsability to cleaning up some of the horrors I've introduced myself in the codebase long ago, and that made me cry a little looking at them. Hopefully, I got better at programming. Hopefully.
 
 ## Status?
-The codebase still requires a lot of cleanup, and while the product is usable in its current state and lots can be achieved with it, there is still ways to go for reaching the first stable release. If you want to help with localization, you can find the translation project [on transifex](https://www.transifex.com/grumpycoders/pcsx-redux/languages/).
+The codebase still requires a lot of cleanup, and while the product is usable in its current state and lots can be achieved with it, there is still ways to go for reaching the first stable release. If you want to help with localization, you can find the translation project [on transifex](https://explore.transifex.com/grumpycoders/pcsx-redux/).
 
 ### What works?
 - Dynamic Recompiler (x86-64, experimental arm64 support)

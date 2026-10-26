@@ -19,11 +19,58 @@
 
 #include "core/gpulogger.h"
 
+#include <algorithm>
+#include <limits>
+#include <utility>
+
 #include "core/gpu.h"
 #include "core/psxemulator.h"
 #include "core/r3000a.h"
 #include "core/system.h"
 #include "imgui/imgui.h"
+
+namespace {
+
+// Separating axis test between a triangle and an axis aligned rectangle. Logged::getVertices hands
+// out triangles for everything, including lines and palette rows, so this single test covers every
+// command's footprint. Degenerate triangles project down to a segment or a point on the edge
+// normals, which the interval overlap below still handles correctly.
+bool triangleIntersectsRect(PCSX::OpenGL::ivec2 v1, PCSX::OpenGL::ivec2 v2, PCSX::OpenGL::ivec2 v3, int rx, int ry,
+                            int rw, int rh) {
+    const int rx2 = rx + rw;
+    const int ry2 = ry + rh;
+    const int tx[3] = {v1.x(), v2.x(), v3.x()};
+    const int ty[3] = {v1.y(), v2.y(), v3.y()};
+
+    if (std::max({tx[0], tx[1], tx[2]}) < rx || std::min({tx[0], tx[1], tx[2]}) > rx2) return false;
+    if (std::max({ty[0], ty[1], ty[2]}) < ry || std::min({ty[0], ty[1], ty[2]}) > ry2) return false;
+
+    for (unsigned i = 0; i < 3; i++) {
+        const unsigned j = (i + 1) % 3;
+        const int nx = ty[j] - ty[i];
+        const int ny = tx[i] - tx[j];
+        if ((nx == 0) && (ny == 0)) continue;
+        int triMin = std::numeric_limits<int>::max();
+        int triMax = std::numeric_limits<int>::min();
+        for (unsigned k = 0; k < 3; k++) {
+            const int p = nx * tx[k] + ny * ty[k];
+            triMin = std::min(triMin, p);
+            triMax = std::max(triMax, p);
+        }
+        int rectMin = std::numeric_limits<int>::max();
+        int rectMax = std::numeric_limits<int>::min();
+        for (unsigned k = 0; k < 4; k++) {
+            const int p = nx * ((k & 1) ? rx2 : rx) + ny * ((k & 2) ? ry2 : ry);
+            rectMin = std::min(rectMin, p);
+            rectMax = std::max(rectMax, p);
+        }
+        if ((triMax < rectMin) || (rectMax < triMin)) return false;
+    }
+
+    return true;
+}
+
+}  // namespace
 
 static const char* const c_vtx = R"(
 #version 330 core
@@ -60,9 +107,16 @@ void main() {
 }
 )";
 
-PCSX::GPULogger::GPULogger() : m_listener(g_system->m_eventBus) {
+PCSX::GPULogger::GPULogger(bool followEmulator) : m_listener(g_system->m_eventBus), m_followEmulator(followEmulator) {
+    if (!followEmulator) return;
     m_listener.listen<Events::GPU::VSync>([this](auto event) {
-        m_frameCounter++;
+        setFrame(m_frameCounter + 1);
+        const unsigned rate = g_emulator->settings.get<Emulator::SettingVideo>() == Emulator::PSX_TYPE_PAL ? 50 : 60;
+        if (++m_fpsVSyncs >= rate) {
+            m_guestFPS = float(m_displayStartChanges) * rate / m_fpsVSyncs;
+            m_displayStartChanges = 0;
+            m_fpsVSyncs = 0;
+        }
         if (m_breakOnVSync) {
             g_system->pause();
         }
@@ -90,6 +144,14 @@ void PCSX::GPULogger::enable() {
         m_readHeatmapTex.create(1024, 512, GL_R32F);
         m_writtenHighlightTex.create(1024, 512, GL_R32F);
         m_readHighlightTex.create(1024, 512, GL_R32F);
+        m_writtenAccumTex.create(1024, 512, GL_R32F);
+        m_readAccumTex.create(1024, 512, GL_R32F);
+        if (!m_writtenAccumTex.exists()) return;
+        if (!m_readAccumTex.exists()) return;
+        m_writtenAccumFB.createWithTexture(m_writtenAccumTex);
+        m_readAccumFB.createWithTexture(m_readAccumTex);
+        if (!m_writtenAccumFB.exists()) return;
+        if (!m_readAccumFB.exists()) return;
         if (!m_writtenHeatmapTex.exists()) return;
         if (!m_readHeatmapTex.exists()) return;
         if (!m_writtenHighlightTex.exists()) return;
@@ -135,23 +197,93 @@ void PCSX::GPULogger::flush() {
     m_verticesCount = 0;
 }
 
-void PCSX::GPULogger::addNodeInternal(GPU::Logged* node, GPU::Logged::Origin origin, uint32_t value, uint32_t length) {
+void PCSX::GPULogger::checkVramBreakpoints(GPU::Logged* node) {
+    bool watchingReads = false;
+    bool watchingWrites = false;
+    for (auto& bp : m_vramBreakpoints) {
+        if (!bp.enabled) continue;
+        watchingReads |= bp.onRead;
+        watchingWrites |= bp.onWrite;
+    }
+    if (!watchingReads && !watchingWrites) return;
+
+    unsigned hit = m_vramBreakpoints.size();
+    auto scan = [this, node, &hit](GPU::Logged::PixelOp op) {
+        node->getVertices(
+            [this, &hit, op](auto v1, auto v2, auto v3) {
+                if (hit != m_vramBreakpoints.size()) return;
+                for (unsigned i = 0; i < m_vramBreakpoints.size(); i++) {
+                    auto& bp = m_vramBreakpoints[i];
+                    if (!bp.enabled) continue;
+                    if (!(op == GPU::Logged::PixelOp::READ ? bp.onRead : bp.onWrite)) continue;
+                    if (triangleIntersectsRect(v1, v2, v3, bp.area.x, bp.area.y, bp.area.w, bp.area.h)) {
+                        hit = i;
+                        return;
+                    }
+                }
+            },
+            op);
+    };
+
+    const char* what = _("write");
+    if (watchingWrites) scan(GPU::Logged::PixelOp::WRITE);
+    if ((hit == m_vramBreakpoints.size()) && watchingReads) {
+        what = _("read");
+        scan(GPU::Logged::PixelOp::READ);
+    }
+    if (hit == m_vramBreakpoints.size()) return;
+
+    const auto& bp = m_vramBreakpoints[hit];
+    const auto name = node->getName();
+    node->highlight = true;
+    g_system->log(LogClass::GPU,
+                  _("VRAM breakpoint %i triggered: %.*s did a %s intersecting %ix%i at %i,%i - PC = 0x%08x\n"), hit,
+                  int(name.size()), name.data(), what, bp.area.w, bp.area.h, bp.area.x, bp.area.y, node->pc);
+    if (!m_followEmulator) return;
+    g_system->m_eventBus->signal(Events::GUI::JumpToPC{node->pc});
+    g_system->pause();
+}
+
+// The list shows the frame that just completed. Anything older goes when the next frame starts,
+// so a frame that sent no commands shows as empty.
+void PCSX::GPULogger::setFrame(uint64_t frame) {
+    m_frameCounter = frame;
+    if (frame > 0) dropFramesBefore(frame - 1);
+}
+
+void PCSX::GPULogger::dropFramesBefore(uint64_t frame) {
+    bool dropped = false;
+    for (auto i = m_list.begin(); (i != m_list.end()) && (i->frame < frame); i = m_list.begin()) {
+        delete &*i;
+        dropped = true;
+    }
+    if (!dropped) return;
+    // The next command starts a new frame for the heatmaps even though nothing is left to compare it to.
+    m_pendingNewFrame = true;
+    // An empty frame replays from the VRAM it started with, not from the snapshot of the dropped frame.
+    if (m_list.empty()) startNewFrame();
+}
+
+void PCSX::GPULogger::addNodeInternal(GPU::Logged* node, GPU::Logged::Origin origin, uint32_t value, uint32_t length,
+                                      bool clipped) {
     auto frame = m_frameCounter;
 
-    bool gotNewFrame = false;
+    bool gotNewFrame = std::exchange(m_pendingNewFrame, false);
     for (auto i = m_list.begin(); (i != m_list.end()) && (i->frame != frame); i = m_list.begin()) {
         delete &*i;
         gotNewFrame = true;
     }
-    if (gotNewFrame) startNewFrame();
+    // An empty list is a cleared log, which has no snapshot of its own frame yet.
+    if (gotNewFrame || m_list.empty()) startNewFrame();
 
     node->origin = origin;
     node->value = value;
     node->length = length;
-    node->pc = g_emulator->m_cpu->m_regs.pc;
+    node->pc = m_followEmulator ? g_emulator->m_cpu->m_regs.pc : 0;
     node->frame = frame;
     node->generateStatsInfo();
     m_list.push_back(node);
+    checkVramBreakpoints(node);
 
     if (!m_hasFramebuffers) return;
 
@@ -162,21 +294,54 @@ void PCSX::GPULogger::addNodeInternal(GPU::Logged* node, GPU::Logged::Origin ori
     m_program.use();
     OpenGL::disableScissor();
 
-    OpenGL::setViewport(m_writtenHeatmapTex.width(), m_writtenHeatmapTex.height());
-    m_writtenHeatmapFB.bind(OpenGL::DrawFramebuffer);
+    // The heatmaps count how many times each pixel is touched during the current frame.
+    if (gotNewFrame) {
+        GLint oldReadFBO;
+        glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &oldReadFBO);
+        m_writtenAccumFB.bind(OpenGL::ReadFramebuffer);
+        m_writtenHeatmapFB.bind(OpenGL::DrawFramebuffer);
+        glBlitFramebuffer(0, 0, 1024, 512, 0, 0, 1024, 512, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        m_readAccumFB.bind(OpenGL::ReadFramebuffer);
+        m_readHeatmapFB.bind(OpenGL::DrawFramebuffer);
+        glBlitFramebuffer(0, 0, 1024, 512, 0, 0, 1024, 512, GL_COLOR_BUFFER_BIT, GL_NEAREST);
+        glBindFramebuffer(GL_READ_FRAMEBUFFER, oldReadFBO);
+        OpenGL::setClearColor(0.0f, 0.0f, 0.0f, 0.0f);
+        m_writtenAccumFB.bind(OpenGL::DrawFramebuffer);
+        OpenGL::clearColor();
+        m_readAccumFB.bind(OpenGL::DrawFramebuffer);
+        OpenGL::clearColor();
+    }
+
+    const bool blendWasEnabled = glIsEnabled(GL_BLEND);
+    glEnable(GL_BLEND);
+    glBlendEquation(GL_FUNC_ADD);
+    glBlendFunc(GL_ONE, GL_ONE);
+
+    OpenGL::setViewport(m_writtenAccumTex.width(), m_writtenAccumTex.height());
+    m_writtenAccumFB.bind(OpenGL::DrawFramebuffer);
+    if (clipped) {
+        int w = int(m_drawingAreaX1) - int(m_drawingAreaX0) + 1;
+        int h = int(m_drawingAreaY1) - int(m_drawingAreaY0) + 1;
+        OpenGL::enableScissor();
+        OpenGL::setScissor(m_drawingAreaX0, m_drawingAreaY0, std::max(w, 0), std::max(h, 0));
+    }
     node->getVertices([this](auto v1, auto v2, auto v3) { addTri(v1, v2, v3); }, GPU::Logged::PixelOp::WRITE);
     flush();
+    OpenGL::disableScissor();
 
-    OpenGL::setViewport(m_readHeatmapTex.width(), m_readHeatmapTex.height());
-    m_readHeatmapFB.bind(OpenGL::DrawFramebuffer);
+    OpenGL::setViewport(m_readAccumTex.width(), m_readAccumTex.height());
+    m_readAccumFB.bind(OpenGL::DrawFramebuffer);
     node->getVertices([this](auto v1, auto v2, auto v3) { addTri(v1, v2, v3); }, GPU::Logged::PixelOp::READ);
     flush();
 
+    if (!blendWasEnabled) glDisable(GL_BLEND);
     glBindFramebuffer(GL_DRAW_FRAMEBUFFER, oldFBO);
     g_emulator->m_gpu->setOpenGLContext();
 }
 
-void PCSX::GPULogger::startNewFrame() { m_vram = g_emulator->m_gpu->getVRAM(GPU::Ownership::ACQUIRE); }
+PCSX::GPU* PCSX::GPULogger::gpu() const { return m_owner ? m_owner : g_emulator->m_gpu.get(); }
+
+void PCSX::GPULogger::startNewFrame() { m_vram = gpu()->getVRAM(GPU::Ownership::ACQUIRE); }
 
 void PCSX::GPULogger::replay(GPU* gpu) {
     if (m_vram.data()) gpu->partialUpdateVRAM(0, 0, 1024, 512, m_vram.data<uint16_t>());
@@ -335,7 +500,8 @@ void PCSX::GPU::DrawingAreaEnd::drawLogNode(unsigned, const DrawLogSettings&) { 
 void PCSX::GPU::DrawingOffset::drawLogNode(unsigned, const DrawLogSettings&) { ImGui::Text("  X: %i, Y: %i", x, y); }
 
 void PCSX::GPU::MaskBit::drawLogNode(unsigned, const DrawLogSettings&) {
-    ImGui::Text(_("  Set: %s, Check: %s"), set ? _("Yes") : _("No"), check ? _("Yes") : _("No"));
+    ImGui::Text("  %s",
+                fmt::format(f_("Set: {}, Check: {}"), set ? _("Yes") : _("No"), check ? _("Yes") : _("No")).c_str());
 }
 
 void PCSX::GPU::CtrlReset::drawLogNode(unsigned, const DrawLogSettings&) {}

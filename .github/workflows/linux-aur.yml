@@ -6,6 +6,10 @@ on:
       - main
   pull_request:
 
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
 jobs:
   aur-build:
     runs-on: ubuntu-latest
@@ -14,8 +18,8 @@ jobs:
     steps:
       - name: Install dependencies
         run: |
-          pacman -Syu --noconfirm --needed capstone curl ffmpeg freetype2 glfw libuv sdl2 zlib git make pkg-config sudo base-devel pacman-contrib
-      - uses: actions/checkout@v3
+          pacman -Syu --noconfirm --needed capstone curl ffmpeg freetype2 libuv sdl3 zlib git make pkg-config sudo base-devel pacman-contrib
+      - uses: actions/checkout@v4
         with:
           set-safe-directory: true
       - name: Create builduser
@@ -29,5 +33,6 @@ jobs:
           git clone https://aur.archlinux.org/pcsx-redux-git.git /build/pcsx-redux-git
           chown -R builduser:builduser /build
           cd /build/pcsx-redux-git
-          sed -i s,git+https://github.com/grumpycoders/pcsx-redux.git,git+file://$GITHUB_WORKSPACE#commit=$GITHUB_SHA,g PKGBUILD
+          sed -i "s,git+https://github.com/\(grumpycoders\|pcsx-redux\)/pcsx-redux.git,git+file://$GITHUB_WORKSPACE#commit=$GITHUB_SHA,g" PKGBUILD
+          grep -q "git+file://$GITHUB_WORKSPACE#commit=$GITHUB_SHA" PKGBUILD
           sudo -u builduser bash -c 'makepkg --noconfirm --syncdeps'

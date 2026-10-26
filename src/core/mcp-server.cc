@@ -1283,7 +1283,7 @@ MCPServer::ToolResult MCPServer::ToolIsGameLoaded() {
         result["iso_name"] = "";
         result["emulation_active"] = false;
         result["in_bios"] = true;
-        result["current_pc"] = g_emulator->m_cpu->m_regs.pc;
+        result["current_pc"] = static_cast<uint32_t>(g_emulator->m_cpu->m_regs.pc);
         result["ram_initialized"] = false;
     }
     
@@ -1495,7 +1495,7 @@ MCPServer::ToolResult MCPServer::ToolGetExecutionState() {
     
     // Add current PC if paused
     if (!is_running && g_emulator->m_cpu) {
-        result["pc"] = g_emulator->m_cpu->m_regs.pc;
+        result["pc"] = static_cast<uint32_t>(g_emulator->m_cpu->m_regs.pc);
         result["instruction"] = g_emulator->m_cpu->m_regs.code;
     }
     

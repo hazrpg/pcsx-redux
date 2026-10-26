@@ -22,13 +22,14 @@
 #include <stdint.h>
 
 #include <functional>
-#include <magic_enum_all.hpp>
+#include <magic_enum/magic_enum_all.hpp>
 #include <memory>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <type_traits>
 #include <utility>
+#include <vector>
 
 #include "core/psxemulator.h"
 #include "core/psxmem.h"
@@ -41,7 +42,50 @@
 
 namespace PCSX {
 class UI;
+class GPUDumper;
+class GPULogger;
 struct SaveStateWrapper;
+
+// GP0 / GP1 packet-layout constants. Each constant names the bit-field
+// width that the PSX protocol assigns to a particular packet payload
+// slot. The packet constructors and the GP0 command dispatcher decode
+// these slots with `value & mask` / `(value >> shift) & mask` shapes;
+// the constants below give those expressions hardware-anchored names
+// without changing the constructor logic. The raw env-packet preserve
+// sites (m_textureWindowRaw, m_drawingStartRaw, m_drawingEndRaw,
+// m_drawingOffsetRaw) keep their inline literals because they are
+// protocol-visible logging fields rather than decoded math.
+
+// GP0 command words carry the command byte in bits 24..28 and the
+// payload in bits 0..23. The 24-bit payload mask is the wire shape
+// shared by every env-class packet constructor.
+static constexpr uint32_t c_PacketInfoMask = 0x00ffffff;
+
+// Coordinate field widths. PSX vertex coordinates pack as 11-bit
+// signed values (sign-extended after extraction); draw-area positions
+// pack as 10-bit X / 9-bit Y; horizontal display range as 12-bit X
+// pairs; CLUT selectors as 6-bit X / 9-bit Y; texture-window fields
+// as 5-bit selectors. With a second VRAM bank the drawing-area,
+// display-start and CLUT Y fields carry a 10th bit (the upper-bank bit);
+// they are decoded full-width and the gate/fitment is resolved downstream
+// via resolveVramY rather than masked away at decode.
+static constexpr uint32_t c_Coord9Mask = 0x1ff;
+static constexpr uint32_t c_Coord10Mask = 0x3ff;
+static constexpr uint32_t c_Coord11Mask = 0x7ff;
+static constexpr uint32_t c_Coord12Mask = 0xfff;
+static constexpr uint32_t c_ClutXFieldMask = 0x3f;
+static constexpr uint32_t c_ClutYFieldMask = c_Coord10Mask;
+static constexpr uint32_t c_TWindowFieldMask = 0x1f;
+
+// Field shifts. The CLUT half-word packs X at bits 0..5 and Y at bits
+// 6..14. The DrawingOffset packs X at bits 0..10 and Y at bits 11..21.
+// The DrawingArea positions pack X at bits 0..9 and Y at bits 10..18.
+// The horizontal display range packs x0 at bits 0..11 and x1 at bits
+// 12..23.
+static constexpr int c_ClutYShift = 6;
+static constexpr int c_DrawingOffsetYShift = 11;
+static constexpr int c_DrawingAreaYShift = 10;
+static constexpr int c_HorizDisplayRangeX1Shift = 12;
 
 class GPU {
   public:
@@ -54,22 +98,71 @@ class GPU {
     }
 
     uint32_t readStatus();
-    void dma(uint32_t madr, uint32_t bcr, uint32_t chcr);
+    // GPUSTAT as the CPU reads it from 1F801814h: readStatus() plus the bits that follow the
+    // beam position.
+    uint32_t readStatusFromBus();
+    // Returns true when the transfer stopped part way, with MADR and BCR already set.
+    bool dma(uint32_t madr, uint32_t bcr, uint32_t chcr);
     static void gpuInterrupt();
 
-    // These functions do not touch GPUSTAT. GPU backends should mirror the IRQ status into GPUSTAT
-    // when readStatus is called
-    void requestIRQ1() { g_emulator->m_mem->setIRQ(2); }
-    void acknowledgeIRQ1() { g_emulator->m_mem->clearIRQ(2); }
+    // 2MB VRAM addressing. Two independent axes decide how an access resolves:
+    // the GP1(09h).0 bank gate (runtime, below) and the emulated VRAM fitment
+    // (1MB retail vs 2MB, a setting). resolveVramY() is the single chokepoint
+    // every VRAM Y-addressing site should route through.
+    bool vram2MBGateOpen() const { return m_vram2MBGateOpen; }
+    bool vram2MBFitted() const;
+    unsigned resolveVramY(unsigned y) const;
+    bool vramOpenBus(unsigned y) const;
+    // Value the GPU data bus floats to for an open-bus (unpopulated upper bank)
+    // read. Hardware-measured on retail 1MB boards (SCPH-1001, SCPH-5501).
+    static constexpr uint16_t kVramOpenBusValue = 0xFFFF;
+
+    // Called whenever the bank gate or fitment changes, so a backend can resync
+    // any derived state (e.g. the soft renderer's effective drawable height).
+    virtual void vramConfigChanged() {}
+    // Called before the bank gate changes. A backend rasterizing off-thread must finish the
+    // primitives already queued, which were issued under the old gate.
+    virtual void drainRenderer() {}
+
+    // These set and clear the IRQ1 flag, which readStatus mirrors into GPUSTAT.24.
+    void requestIRQ1() {
+        m_irq1Flag = true;
+        if (!m_detached) g_emulator->m_mem->setIRQ(2);
+    }
+    void acknowledgeIRQ1() {
+        m_irq1Flag = false;
+        if (!m_detached) g_emulator->m_mem->clearIRQ(2);
+    }
+
+    // A detached GPU is an extra instance that is not wired to the emulated machine, such as the one
+    // used to play back GPU dumps. It raises no interrupts, touches no emulator settings, and logs
+    // into its own GPULogger instead of the global one.
+    void detach(GPULogger *logger) {
+        m_detached = true;
+        m_logger = logger;
+    }
+    bool isDetached() const { return m_detached; }
+    void setDumper(GPUDumper *dumper) { m_dumper = dumper; }
+    // True when no GP0 command is partially received, so a dump can start cleanly.
+    bool isIdle() const { return m_processor == &m_defaultProcessor; }
+    // The last word written for a given GP1 command.
+    uint32_t getStatusControl(uint8_t cmd) const { return m_statusControl[cmd]; }
+    // The last GP0(E3h), GP0(E4h) and GP0(E5h) words, low 24 bits.
+    uint32_t getDrawingStartRaw() const { return m_drawingStartRaw; }
+    uint32_t getDrawingEndRaw() const { return m_drawingEndRaw; }
+    uint32_t getDrawingOffsetRaw() const { return m_drawingOffsetRaw; }
+    // Words that bring a freshly reset GPU to the current state, VRAM excluded.
+    void getRestoreSequence(std::vector<uint32_t> &gp0, std::vector<uint32_t> &gp1) const;
 
     bool m_showCfg = false;
     bool m_showDebug = false;
     virtual bool configure() = 0;
     virtual void debug() = 0;
-    virtual ~GPU() {}
+    virtual ~GPU();
 
     void serialize(SaveStateWrapper *);
     void deserialize(const SaveStateWrapper *);
+    void restoreEnvironment(const uint8_t *env, uint32_t status);
 
   private:
     uint32_t s_usedAddr[3];
@@ -94,6 +187,9 @@ class GPU {
     virtual void restoreStatus(uint32_t status) = 0;
 
     virtual void vblank(bool fromGui = false) = 0;
+    // Draws the current display into the GUI's offscreen target without stepping any
+    // emulated state, unlike vblank(). The GUI flips afterwards.
+    virtual void presentFromGui() = 0;
     virtual void addVertex(short sx, short sy, int64_t fx, int64_t fy, int64_t fz) {
         throw std::runtime_error("Not yet implemented");
     }
@@ -105,6 +201,11 @@ class GPU {
     virtual void setDither(int setting) = 0;
     void reset() {
         resetBackend();
+        m_irq1Flag = false;
+        drainRenderer();
+        m_vram2MBGateOpen = false;
+        m_dmaDirection = 0;
+        vramConfigChanged();
         m_dataRet = 0;
         m_readFifo->reset();
         m_processor->reset();
@@ -190,6 +291,11 @@ class GPU {
 
   private:
     uint32_t m_statusControl[256];
+    bool m_irq1Flag = false;
+    uint32_t m_envRaw[7];
+    bool m_detached = false;
+    GPULogger *m_logger = nullptr;
+    GPUDumper *m_dumper = nullptr;
 
     class Buffer {
       public:
@@ -244,40 +350,48 @@ class GPU {
     };
 
   public:
-    template <typename T, T wMax = 1024, T hMax = 512>
-    static bool clip(T &x, T &y, T &w, T &h) {
+    // X-only clip against the 1024-wide buffer. Used by the VRAM transfer
+    // paths when the bank gate is open: there the per-row Y counter WRAPS at
+    // the 10-bit boundary (resolveVramY -> y & 0x3ff) instead of clipping, so
+    // Y/h must be left untouched and only the X extent clamped. Hardware-
+    // measured on 573 silicon (transfer-wrap-y, 2026-06-15): a transfer that
+    // runs past Y=1023 wraps to Y=0 rather than dropping the overflow rows
+    // (verdict=WRAP for both upload and copy). psx-spx Wrapping note: Copy/Fill
+    // wrap to the opposite edge at the addressable VRAM size.
+    template <typename T, T wMax = 1024>
+    static bool clipX(T &x, T &w) {
         bool clipped = false;
-        if (x >= wMax || y >= hMax) {
+        if (x >= wMax) {
             x = wMax;
-            y = hMax;
-            if ((w != 0) || (h != 0)) {
-                w = h = 0;
+            if (w != 0) {
+                w = 0;
                 return true;
             }
             return false;
-        }
-        if (x < 0) {
-            clipped = true;
-            w += x;
-            x = 0;
-        }
-        if (y < 0) {
-            clipped = true;
-            h += y;
-            y = 0;
-        }
-        if (w < 0 || h < 0) {
-            h = w = 0;
-            return true;
         }
         if (x + w > wMax) {
             clipped = true;
             w = wMax - x;
         }
-        if (y + h > hMax) {
+        return clipped;
+    }
+
+    template <typename T, T wMax = 1024, T hMax = 512>
+    static bool clip(T &x, T &y, T &w, T &h) {
+        bool clipped = false;
+        x %= wMax;
+        y %= hMax;
+
+        if (x + w > wMax) {
+            x = 0;
             clipped = true;
-            h = hMax - y;
         }
+
+        if (y + h > hMax) {
+            y = 0;
+            clipped = true;
+        }
+
         return clipped;
     }
 
@@ -571,14 +685,14 @@ class GPU {
         DrawingOffset offset;
         TextureUnitType clutX() {
             if constexpr (textured == Textured::Yes) {
-                return (clutraw & 0x3f) * 16;
+                return (clutraw & c_ClutXFieldMask) * 16;
             } else {
                 return {};
             }
         }
         TextureUnitType clutY() {
             if constexpr (textured == Textured::Yes) {
-                return (clutraw >> 6) & 0x1ff;
+                return (clutraw >> c_ClutYShift) & c_ClutYFieldMask;
             } else {
                 return {};
             }
@@ -681,14 +795,14 @@ class GPU {
         DrawingOffset offset;
         TextureUnitType clutX() {
             if constexpr (textured == Textured::Yes) {
-                return (clutraw & 0x3f) * 16;
+                return (clutraw & c_ClutXFieldMask) * 16;
             } else {
                 return {};
             }
         }
         TextureUnitType clutY() {
             if constexpr (textured == Textured::Yes) {
-                return (clutraw >> 6) & 0x1ff;
+                return (clutraw >> c_ClutYShift) & c_ClutYFieldMask;
             } else {
                 return {};
             }
@@ -755,7 +869,8 @@ class GPU {
         void generateStatsInfo() override {}
         void cumulateStats(GPUStats *) override {}
         void getVertices(AddTri &&, PixelOp) override {}
-        CtrlDisplayStart(uint32_t value) : x(value & 0x3ff), y((value >> 10) & 0x1ff) {}
+        CtrlDisplayStart(uint32_t value)
+            : x(value & c_Coord10Mask), y((value >> c_DrawingAreaYShift) & c_Coord10Mask) {}
         CtrlDisplayStart(const CtrlDisplayStart &other) = default;
         CtrlDisplayStart(CtrlDisplayStart &&other) = default;
         CtrlDisplayStart &operator=(const CtrlDisplayStart &other) = default;
@@ -768,7 +883,8 @@ class GPU {
         void generateStatsInfo() override {}
         void cumulateStats(GPUStats *) override {}
         void getVertices(AddTri &&, PixelOp) override {}
-        CtrlHorizontalDisplayRange(uint32_t value) : x0(value & 0xfff), x1((value >> 12) & 0xfff) {}
+        CtrlHorizontalDisplayRange(uint32_t value)
+            : x0(value & c_Coord12Mask), x1((value >> c_HorizDisplayRangeX1Shift) & c_Coord12Mask) {}
         CtrlHorizontalDisplayRange(const CtrlHorizontalDisplayRange &other) = default;
         CtrlHorizontalDisplayRange(CtrlHorizontalDisplayRange &&other) = default;
         CtrlHorizontalDisplayRange &operator=(const CtrlHorizontalDisplayRange &other) = default;
@@ -781,7 +897,8 @@ class GPU {
         void generateStatsInfo() override {}
         void cumulateStats(GPUStats *) override {}
         void getVertices(AddTri &&, PixelOp) override {}
-        CtrlVerticalDisplayRange(uint32_t value) : y0(value & 0x3ff), y1((value >> 10) & 0x3ff) {}
+        CtrlVerticalDisplayRange(uint32_t value)
+            : y0(value & c_Coord10Mask), y1((value >> c_DrawingAreaYShift) & c_Coord10Mask) {}
         CtrlVerticalDisplayRange(const CtrlVerticalDisplayRange &other) = default;
         CtrlVerticalDisplayRange(CtrlVerticalDisplayRange &&other) = default;
         CtrlVerticalDisplayRange &operator=(const CtrlVerticalDisplayRange &other) = default;
@@ -879,6 +996,11 @@ class GPU {
     uint32_t m_drawingStartRaw = 0;
     uint32_t m_drawingEndRaw = 0;
     uint32_t m_drawingOffsetRaw = 0;
+    bool m_vram2MBGateOpen = false;  // GP1(09h).0: 1 opens the upper 1MB bank
+    uint32_t m_dmaDirection = 0;     // GP1(04h).0-1
+
+    // GPUSTAT.28 with GP1(04h)=2: low while a polygon or line command is partially received.
+    bool dmaBlockRequestLow() const;
 
     virtual void write0(ClearCache *) = 0;
     virtual void write0(FastFill *) = 0;

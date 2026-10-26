@@ -51,6 +51,8 @@ void PCSX::OpenGL_GPU::resetBackend() {
 
     m_drawingOffset = OpenGL::ivec2(0, 0);
 
+    m_vramConfigDirty = true;
+
     m_program.use();
     setDrawOffset(0x00000000);
     setTexWindowUnchecked(0x00000000);
@@ -164,14 +166,20 @@ int PCSX::OpenGL_GPU::initBackend(UI *ui) {
         flat out int texMode;
 
         // We always apply a 0.5 offset in addition to the drawing offsets, to cover up OpenGL inaccuracies
-        uniform vec2 u_vertexOffsets = vec2(+0.5, -0.5);
+        uniform vec2 u_vertexOffsets = vec2(+0.5, +0.5);
+
+        // 1 when 2MB of VRAM is fitted, in which case texpage bit 11 is the
+        // high bit of the texture page Y instead of the (unused) texture
+        // disable bit.
+        uniform int u_texpage2MB = 0;
 
         void main() {
-           // Normalize coords to [0, 2]
+           // Normalize coords to [0, 2]. The VRAM is 1024x1024, so the halves
+           // are 512 and 512.
            float x = float(inPos.x);
            float y = float(inPos.y);
            float xx = (x + u_vertexOffsets.x) / 512.0;
-           float yy = (y + u_vertexOffsets.y) / 256;
+           float yy = (y + u_vertexOffsets.y) / 512.0;
 
            // Normalize to [-1, 1]
            xx -= 1.0;
@@ -190,7 +198,8 @@ int PCSX::OpenGL_GPU::initBackend(UI *ui) {
            } else {
                texMode = (inTexpage >> 7) & 3;
                texCoords = inUV;
-               texpageBase = ivec2((inTexpage & 0xf) * 64, ((inTexpage >> 4) & 0x1) * 256);
+               int texpageY = ((inTexpage >> 4) & 0x1) | (((inTexpage >> 11) & u_texpage2MB) << 1);
+               texpageBase = ivec2((inTexpage & 0xf) * 64, texpageY * 256);
                clutBase = ivec2((inClut & 0x3f) * 16, inClut >> 6);
            }
         }
@@ -217,13 +226,19 @@ int PCSX::OpenGL_GPU::initBackend(UI *ui) {
         uniform sampler2D u_vramTex;
         uniform vec4 u_blendFactors;
         uniform vec4 u_blendFactorsIfOpaque = vec4(1.0, 1.0, 1.0, 0.0);
+        // 511 when only the lower bank is addressable (1MB, or 2MB with the
+        // GP1(09h) gate closed - the upper rows then mirror onto the lower
+        // ones), 1023 when the full 2MB is reachable.
+        uniform int u_vramMaskY = 511;
+        // NTSC 480i with GP0(E1h).10 clear: the VRAM row parity not to write, or -1.
+        uniform int u_skipParity = -1;
 
         int floatToU5(float f) {
             return int(floor(f * 31.0 + 0.5));
         }
 
         vec4 sampleVRAM(ivec2 coords) {
-            coords &= ivec2(1023, 511); // Out-of-bounds VRAM accesses wrap
+            coords &= ivec2(1023, u_vramMaskY); // Out-of-bounds VRAM accesses wrap
             return texelFetch(u_vramTex, coords, 0);
         }
 
@@ -245,6 +260,7 @@ int PCSX::OpenGL_GPU::initBackend(UI *ui) {
         }
 
         void main() {
+           if ((int(gl_FragCoord.y) & 1) == u_skipParity) discard;
            if (texMode == 4) { // Untextured primitive
                FragColor = vertexColor;
                BlendColor = u_blendFactors;
@@ -263,7 +279,7 @@ int PCSX::OpenGL_GPU::initBackend(UI *ui) {
                int clutIndex = (sample >> shift) & 0xf;
 
                ivec2 sampleCoords = ivec2(clutBase.x + clutIndex, clutBase.y);
-               FragColor = texelFetch(u_vramTex, sampleCoords, 0);
+               FragColor = sampleVRAM(sampleCoords);
 
                if (FragColor.rgb == vec3(0.0, 0.0, 0.0)) discard;
                BlendColor = FragColor.a >= 0.5 ? u_blendFactors : u_blendFactorsIfOpaque;
@@ -276,7 +292,7 @@ int PCSX::OpenGL_GPU::initBackend(UI *ui) {
                int clutIndex = (sample >> shift) & 0xff;
 
                ivec2 sampleCoords = ivec2(clutBase.x + clutIndex, clutBase.y);
-               FragColor = texelFetch(u_vramTex, sampleCoords, 0);
+               FragColor = sampleVRAM(sampleCoords);
 
                if (FragColor.rgb == vec3(0.0, 0.0, 0.0)) discard;
                BlendColor = FragColor.a >= 0.5 ? u_blendFactors : u_blendFactorsIfOpaque;
@@ -304,11 +320,17 @@ int PCSX::OpenGL_GPU::initBackend(UI *ui) {
     m_texWindowLoc = OpenGL::uniformLocation(m_program, "u_texWindow");
     m_blendFactorsLoc = OpenGL::uniformLocation(m_program, "u_blendFactors");
     m_blendFactorsIfOpaqueLoc = OpenGL::uniformLocation(m_program, "u_blendFactorsIfOpaque");
+    m_vramMaskYLoc = OpenGL::uniformLocation(m_program, "u_vramMaskY");
+    m_texpage2MBLoc = OpenGL::uniformLocation(m_program, "u_texpage2MB");
+    m_skipParityLoc = OpenGL::uniformLocation(m_program, "u_skipParity");
+    m_skipParity = s_skipParityUnknown;
+    m_vramConfigDirty = true;
+    pushVRAMConfig();
 
     const auto vramSamplerLoc = OpenGL::uniformLocation(m_program, "u_vramTex");
     glUniform1i(vramSamplerLoc, 0);  // Make the fragment shader read from currently binded texture
 
-    m_vramTexture24.create(1024, 512, GL_RGBA8);
+    m_vramTexture24.create(vramWidth, vramHeight, GL_RGBA8);
     m_fbo24.createWithDrawTexture(m_vramTexture24);
     m_shaderEditor24.init();
     m_shaderEditor24.reset(m_gui);
@@ -346,7 +368,7 @@ int texelToRaw(in vec4 t) {
 }
 
 vec4 readTexture(in vec2 pos) {
-    vec2 apos = vec2(1024.0f, 512.0f) * pos;
+    vec2 apos = vec2(1024.0f, 1024.0f) * pos;
     vec2 fpos = fract(apos);
     ivec2 ipos = ivec2(apos);
     vec4 ret = vec4(0.0f);
@@ -447,6 +469,11 @@ bool PCSX::OpenGL_GPU::configure() {
             m_texWindowLoc = OpenGL::uniformLocation(m_program, "u_texWindow");
             m_blendFactorsLoc = OpenGL::uniformLocation(m_program, "u_blendFactors");
             m_blendFactorsIfOpaqueLoc = OpenGL::uniformLocation(m_program, "u_blendFactorsIfOpaque");
+            m_vramMaskYLoc = OpenGL::uniformLocation(m_program, "u_vramMaskY");
+            m_texpage2MBLoc = OpenGL::uniformLocation(m_program, "u_texpage2MB");
+            m_skipParityLoc = OpenGL::uniformLocation(m_program, "u_skipParity");
+            m_skipParity = s_skipParityUnknown;
+            m_vramConfigDirty = true;
 
             const auto vramSamplerLoc = OpenGL::uniformLocation(m_program, "u_vramTex");
             glUniform1i(vramSamplerLoc, 0);  // Make the fragment shader read from currently bound texture
@@ -478,7 +505,7 @@ bool PCSX::OpenGL_GPU::configure() {
         int msaaSampleCount = g_emulator->settings.get<Emulator::SettingMSAA>();
         const auto msaaString = msaaSampleCount == 1 ? _("No MSAA") : fmt::format(f_("{}x MSAA"), msaaSampleCount);
 
-        if (ImGui::BeginCombo(_("MSAA"), msaaString.c_str())) {
+        if (ImGui::BeginCombo("MSAA", msaaString.c_str())) {
             const int maxMSAA = OpenGL::maxSamples();
 
             if (ImGui::Selectable(_("No MSAA"))) {
@@ -598,7 +625,7 @@ void PCSX::OpenGL_GPU::vblank(bool fromGui) {
         if (m_multisampled) {
             m_fbo.bind(OpenGL::ReadFramebuffer);
             m_fboNoMSAA.bind(OpenGL::DrawFramebuffer);
-            glBlitFramebuffer(0, 0, 1024, 512, 0, 0, 1024, 512, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+            glBlitFramebuffer(0, 0, vramWidth, vramHeight, 0, 0, vramWidth, vramHeight, GL_COLOR_BUFFER_BIT, GL_LINEAR);
             texture = m_vramTextureNoMSAA.handle();
         } else {
             texture = m_vramTexture.handle();
@@ -612,8 +639,9 @@ void PCSX::OpenGL_GPU::vblank(bool fromGui) {
 
     if (m_display.info.depth == CtrlDisplayMode::CD_24BITS) {
         m_fbo24.bind(OpenGL::DrawFramebuffer);
-        OpenGL::setViewport(1024, 512);
-        m_shaderEditor24.render(m_gui, texture, {0, 0}, {1, 1}, {1024, 512}, {lua_Number(m_display.start.x() * 2)});
+        OpenGL::setViewport(vramWidth, vramHeight);
+        m_shaderEditor24.render(m_gui, texture, {0, 0}, {1, 1}, {vramWidth, vramHeight},
+                                {lua_Number(m_display.start.x() * 2)});
         texture = m_vramTexture24.handle();
         width *= 1.5f;
     }
@@ -624,8 +652,25 @@ void PCSX::OpenGL_GPU::vblank(bool fromGui) {
     m_gui->m_offscreenShaderEditor.render(m_gui, texture, {startX, startY}, {width, height}, m_gui->getRenderSize());
 }
 
+// Push the VRAM fitment / bank gate state down to the shaders. Called from
+// renderBatch() rather than from the GP1(09h) handler because only the former
+// is guaranteed to run with our OpenGL context current and our program bound.
+void PCSX::OpenGL_GPU::pushVRAMConfig() {
+    if (!m_vramConfigDirty) return;
+    m_vramConfigDirty = false;
+
+    const bool fitted = vram2MBFitted();
+    m_program.use();
+    // The upper bank is only addressable with 2MB fitted and the gate open.
+    // Otherwise Y folds back into the lower 512 rows, which is what silicon
+    // does and what resolveVramY() applies on the transfer paths.
+    glUniform1i(m_vramMaskYLoc, (fitted && vram2MBGateOpen()) ? 1023 : 511);
+    glUniform1i(m_texpage2MBLoc, fitted ? 1 : 0);
+}
+
 void PCSX::OpenGL_GPU::renderBatch() {
     if (m_vertexCount > 0) {
+        pushVRAMConfig();
         if (m_syncVRAM) {
             m_syncVRAM = false;
             glCopyTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, 0, 0, vramWidth, vramHeight);
@@ -661,7 +706,7 @@ void PCSX::OpenGL_GPU::renderBatch() {
 void PCSX::OpenGL_GPU::setDisplayEnable(bool enabled) { m_display.enabled = enabled; }
 
 PCSX::Slice PCSX::OpenGL_GPU::getVRAM(Ownership) {
-    static constexpr uint32_t texSize = 1024 * 512 * sizeof(uint16_t);
+    static constexpr uint32_t texSize = vramWidth * vramHeight * sizeof(uint16_t);
     uint16_t *pixels = (uint16_t *)malloc(texSize);
     glFlush();
     const auto oldTex = OpenGL::getTex2D();
@@ -830,7 +875,19 @@ void PCSX::OpenGL_GPU::write0(ClearCache *) {
     m_syncVRAM = true;
 }
 
-void PCSX::OpenGL_GPU::write0(TPage *prim) { m_rectTexpage = prim->raw; }
+void PCSX::OpenGL_GPU::write0(TPage *prim) {
+    m_rectTexpage = prim->raw;
+    m_drawToDisplay = prim->drawToDisplay;
+}
+
+void PCSX::OpenGL_GPU::updateSkipParity() {
+    int parity = -1;
+    if (!m_drawToDisplay && ((getStatusControl(8) & 0x2c) == 0x24)) parity = readStatusFromBus() >> 31;
+    if (parity == m_skipParity) return;
+    renderBatch();
+    m_skipParity = parity;
+    glUniform1i(m_skipParityLoc, parity);
+}
 
 // Set texture window, regardless of whether the window config changed
 void PCSX::OpenGL_GPU::setTexWindowUnchecked(uint32_t cmd) {
@@ -883,7 +940,7 @@ void PCSX::OpenGL_GPU::setDrawOffset(uint32_t cmd) {
 
     // The 0.5 offsets help fix some holes in rendering, in places like the PS logo
     // TODO: This might not work when upscaling?
-    float adjustedOffsets[2] = {static_cast<float>(offsetX) + 0.5f, static_cast<float>(offsetY) - 0.5f};
+    float adjustedOffsets[2] = {static_cast<float>(offsetX) + 0.5f, static_cast<float>(offsetY) + 0.5f};
     glUniform2fv(m_drawingOffsetLoc, 1, adjustedOffsets);
 }
 
@@ -899,6 +956,7 @@ void PCSX::OpenGL_GPU::write0(DrawingOffset *prim) {
 }
 
 void PCSX::OpenGL_GPU::write0(FastFill *prim) {
+    updateSkipParity();
     renderBatch();
     const auto colour = prim->color;
     const float r = float(colour & 0xff) / 255.f;
@@ -906,8 +964,17 @@ void PCSX::OpenGL_GPU::write0(FastFill *prim) {
     const float b = float((colour >> 16) & 0xff) / 255.f;
 
     OpenGL::setClearColor(r, g, b, 1.f);
-    OpenGL::setScissor(prim->x, prim->y, prim->w, prim->h);
-    OpenGL::clearColor();
+    if (m_skipParity < 0) {
+        OpenGL::setScissor(prim->x, prim->y, prim->w, prim->h);
+        OpenGL::clearColor();
+    } else {
+        // GP0(02h) is not exempt from the 480i row skip: clear the rows of the other parity one by one.
+        for (unsigned y = prim->y; y < prim->y + prim->h; y++) {
+            if ((y & 1) == unsigned(m_skipParity)) continue;
+            OpenGL::setScissor(prim->x, y, prim->w, 1);
+            OpenGL::clearColor();
+        }
+    }
     setScissorArea();
 }
 
@@ -935,6 +1002,7 @@ void PCSX::OpenGL_GPU::write0(BlitVramVram *prim) {
 template <PCSX::GPU::Shading shading, PCSX::GPU::Shape shape, PCSX::GPU::Textured textured, PCSX::GPU::Blend blend,
           PCSX::GPU::Modulation modulation>
 void PCSX::OpenGL_GPU::polyExec(Poly<shading, shape, textured, blend, modulation> *prim) {
+    updateSkipParity();
     if constexpr (blend == Blend::Off) {
         setTransparency<Transparency::Opaque>();
     } else if constexpr (blend == Blend::Semi) {
@@ -963,6 +1031,7 @@ void PCSX::OpenGL_GPU::polyExec(Poly<shading, shape, textured, blend, modulation
 
 template <PCSX::GPU::Shading shading, PCSX::GPU::LineType lineType, PCSX::GPU::Blend blend>
 void PCSX::OpenGL_GPU::lineExec(Line<shading, lineType, blend> *prim) {
+    updateSkipParity();
     auto count = prim->colors.size();
 
     if constexpr (blend == Blend::Off) {
@@ -985,6 +1054,7 @@ void PCSX::OpenGL_GPU::lineExec(Line<shading, lineType, blend> *prim) {
 
 template <PCSX::GPU::Size size, PCSX::GPU::Textured textured, PCSX::GPU::Blend blend, PCSX::GPU::Modulation modulation>
 void PCSX::OpenGL_GPU::rectExec(Rect<size, textured, blend, modulation> *prim) {
+    updateSkipParity();
     if constexpr (blend == Blend::Off) {
         setTransparency<Transparency::Opaque>();
     } else if constexpr (blend == Blend::Semi) {
@@ -1004,6 +1074,8 @@ void PCSX::OpenGL_GPU::rectExec(Rect<size, textured, blend, modulation> *prim) {
 
 void PCSX::OpenGL_GPU::write1(CtrlReset *) {
     // TODO: This should perform some more operations
+    // GP1(00h) clears GP0(E1h), DFE included.
+    m_drawToDisplay = false;
     m_display.reset();
     setDisplayEnable(false);
     acknowledgeIRQ1();
@@ -1017,7 +1089,13 @@ void PCSX::OpenGL_GPU::write1(CtrlDisplayEnable *ctrl) { setDisplayEnable(ctrl->
 
 void PCSX::OpenGL_GPU::write1(CtrlDmaSetting *) {}
 
-void PCSX::OpenGL_GPU::write1(CtrlDisplayStart *ctrl) { m_display.set(ctrl); }
+void PCSX::OpenGL_GPU::write1(CtrlDisplayStart *ctrl) {
+    // The decoded Y keeps the upper-bank bit; with the gate closed it folds
+    // into the lower 512 rows like any other VRAM access.
+    CtrlDisplayStart resolved = *ctrl;
+    resolved.y = resolveVramY(ctrl->y);
+    m_display.set(&resolved);
+}
 void PCSX::OpenGL_GPU::write1(CtrlHorizontalDisplayRange *ctrl) { m_display.set(ctrl); }
 void PCSX::OpenGL_GPU::write1(CtrlVerticalDisplayRange *ctrl) { m_display.set(ctrl); }
 void PCSX::OpenGL_GPU::write1(CtrlDisplayMode *ctrl) { m_display.set(ctrl); }

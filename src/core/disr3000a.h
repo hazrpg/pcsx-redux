@@ -36,6 +36,28 @@ class Disasm {
     static const char *s_disRNameCP2D[];
     static const char *s_disRNameCP2C[];
     static const char *s_disRNameCP0[];
+    static const char *getSyscallName(uint32_t index);
+
+    // Abstracts where operand values come from when disassembling "with values".
+    // The live source reads the running CPU/memory; a playback source can feed
+    // sparse values captured in a binary trace, so the exact same disassembly
+    // traversal renders an identical annotated line from recorded data.
+    struct ValueSource {
+        virtual ~ValueSource() = default;
+        virtual uint32_t gpr(uint8_t reg) = 0;
+        virtual uint32_t cp0(uint8_t reg) = 0;
+        virtual uint32_t cp2d(uint8_t reg) = 0;
+        virtual uint32_t cp2c(uint8_t reg) = 0;
+        virtual uint32_t hi() = 0;
+        virtual uint32_t lo() = 0;
+        virtual uint8_t mem8(uint32_t addr) = 0;
+        virtual uint16_t mem16(uint32_t addr) = 0;
+        virtual uint32_t mem32(uint32_t addr) = 0;
+    };
+    // The default source: reads live state from the running emulator. Used when
+    // withValues is requested but no explicit source is supplied, and reused by
+    // the trace recorder for its side-effect-free memory peeks.
+    static ValueSource &liveValueSource();
 
 #define declare(n) \
     void n(uint32_t code, uint32_t nextCode, uint32_t pc, bool *skipNext = nullptr, bool *delaySlotNext = nullptr)
@@ -52,7 +74,7 @@ class Disasm {
     }
 
     static std::string asString(uint32_t code, uint32_t nextCode, uint32_t pc, bool *skipNext = nullptr,
-                                bool withValues = false);
+                                bool withValues = false, ValueSource *values = nullptr);
     virtual void reset() {}
 
   protected:
@@ -72,6 +94,7 @@ class Disasm {
     virtual void OfB(int16_t offset, uint8_t reg, int size) = 0;
     virtual void BranchDest(uint32_t offset) = 0;
     virtual void Offset(uint32_t offset, int size) = 0;
+    virtual void SyscallName(const char *) = 0;
 
   private:
     // Type definition of our functions
@@ -103,7 +126,9 @@ class Disasm {
     declare(disXORI);
     declare(disLUI);
     declare(disCOP0);
+    declare(disCOPn);
     declare(disCOP2);
+    declare(disBCz);
 
     declare(disLB);
     declare(disLH);
@@ -188,6 +213,9 @@ class Disasm {
     declare(disGPL);
     declare(disNCCT);
 #undef declare
+
+    // li is the addiu/ori $zero pseudo-instruction; li $a0 followed by a plain syscall reads as the named syscall
+    void disLI(uint8_t reg, uint16_t imm, bool zeroExtend, uint32_t nextCode, bool *skipNext);
 };
 
 }  // namespace PCSX

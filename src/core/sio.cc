@@ -27,6 +27,7 @@
 
 #include "core/memorycard.h"
 #include "core/pad.h"
+#include "mips-common/util/sjis-fullwidth-ascii.hh"
 #include "support/sjis_conv.h"
 #include "support/strings-helpers.h"
 
@@ -112,19 +113,16 @@ void PCSX::SIO::writePad(uint8_t value) {
 
             switch (m_regs.control & ControlFlags::WHICH_PORT) {
                 case SelectedPort::Port1:
-                    if (!PCSX::g_emulator->m_pads->isPadConnected(1)) {
+                    if (!PCSX::g_emulator->m_pads->startPoll(Pads::Port::Port1, m_padAddress, m_buffer[0])) {
                         m_buffer[0] = 0xff;
                         return;
                     }
-
-                    m_buffer[0] = PCSX::g_emulator->m_pads->startPoll(Pads::Port::Port1);
                     break;
                 case SelectedPort::Port2:
-                    if (!PCSX::g_emulator->m_pads->isPadConnected(2)) {
+                    if (!PCSX::g_emulator->m_pads->startPoll(Pads::Port::Port2, m_padAddress, m_buffer[0])) {
                         m_buffer[0] = 0xff;
                         return;
                     }
-                    m_buffer[0] = PCSX::g_emulator->m_pads->startPoll(Pads::Port::Port2);
                     break;
             }
 
@@ -186,6 +184,13 @@ void PCSX::SIO::transmitData() {
 
     if (m_currentDevice == DeviceType::None) {
         m_currentDevice = m_regs.data;
+        m_padAddress = m_regs.data;
+        // A multitap also answers 02h to 04h, its slots B to D.
+        if (m_currentDevice >= 0x02 && m_currentDevice <= 0x04) {
+            const auto port = (m_regs.control & ControlFlags::WHICH_PORT) == SelectedPort::Port2 ? Pads::Port::Port2
+                                                                                                   : Pads::Port::Port1;
+            if (PCSX::g_emulator->m_pads->hasMultitap(port)) m_currentDevice = DeviceType::PAD;
+        }
     }
 
     switch (m_currentDevice) {
@@ -307,7 +312,10 @@ void PCSX::SIO::writeCtrl16(uint16_t value) {
         m_bufferIndex = 0;
         m_regs.status = StatusFlags::TX_DATACLEAR | StatusFlags::TX_FINISHED;
         g_emulator->m_mem->writeHardwareRegister<0x1044>(m_regs.status);
-        PCSX::g_emulator->m_cpu->m_regs.interrupt &= ~(1 << PCSX::PSXINT_SIO);
+        g_emulator->m_cpu->unschedule(Schedule::SIO);
+        m_regs.mode = 0;
+        m_regs.baud = 0;
+        m_regs.control = 0;
         m_currentDevice = DeviceType::None;
     }
 
@@ -348,7 +356,7 @@ uint16_t PCSX::SIO::readStatus16() {
     return hard;
 }
 
-void PCSX::SIO::interrupt() {
+void PCSX::SIO::scheduledCallback() {
     SIO0_LOG("Sio Interrupt (CP0.Status = %x)\n", PCSX::g_emulator->m_cpu->m_regs.CP0.n.Status);
     m_regs.status |= StatusFlags::IRQ;
     g_emulator->m_mem->writeHardwareRegister<0x1044>(m_regs.status);
@@ -362,7 +370,7 @@ void PCSX::SIO::interrupt() {
 #endif
 }
 
-void PCSX::SIO::getMcdBlockInfo(int mcd, int block, McdBlock &info) {
+void PCSX::SIO::getMcdBlockInfo(int mcd, int block, McdBlock& info) {
     if (block < 1 || block > 15) {
         throw std::runtime_error(_("Wrong block number"));
     }
@@ -373,10 +381,10 @@ void PCSX::SIO::getMcdBlockInfo(int mcd, int block, McdBlock &info) {
     info.number = block;
     info.mcd = mcd;
 
-    char *data = getMcdData(mcd);
-    uint8_t *ptr = reinterpret_cast<uint8_t *>(data) + block * c_blockSize + 2;
-    auto &ta = info.titleAscii;
-    auto &ts = info.titleSjis;
+    char* data = getMcdData(mcd);
+    uint8_t* ptr = reinterpret_cast<uint8_t*>(data) + block * c_blockSize + 2;
+    auto& ta = info.titleAscii;
+    auto& ts = info.titleSjis;
     info.iconCount = std::max(1, *ptr & 0x3);
 
     ptr += 2;
@@ -393,56 +401,28 @@ void PCSX::SIO::getMcdBlockInfo(int mcd, int block, McdBlock &info) {
             c |= b;
         }
 
-        // Poor man's SJIS to ASCII conversion
-        if (c >= 0x8281 && c <= 0x829a) {
-            c = (c - 0x8281) + 'a';
-        } else if (c >= 0x824f && c <= 0x827a) {
-            c = (c - 0x824f) + '0';
-        } else if (c == 0x8140) {
-            c = ' ';
-        } else if (c == 0x8143) {
-            c = ',';
-        } else if (c == 0x8144) {
-            c = '.';
-        } else if (c == 0x8146) {
-            c = ':';
-        } else if (c == 0x8147) {
-            c = ';';
-        } else if (c == 0x8148) {
-            c = '?';
-        } else if (c == 0x8149) {
-            c = '!';
-        } else if (c == 0x815e) {
-            c = '/';
-        } else if (c == 0x8168) {
-            c = '"';
-        } else if (c == 0x8169) {
-            c = '(';
-        } else if (c == 0x816a) {
-            c = ')';
-        } else if (c == 0x816d) {
-            c = '[';
-        } else if (c == 0x816e) {
-            c = ']';
-        } else if (c == 0x817c) {
-            c = '-';
-        } else if (c > 0x7e) {
-            c = '?';
+        bool found = false;
+        for (int s = 0; s < sizeof(::Sjis::c_fullwidthAsciiToSjis) / sizeof(::Sjis::c_fullwidthAsciiToSjis[0]); s++) {
+            if (c == ::Sjis::c_fullwidthAsciiToSjis[s]) {
+                c = s + 0x20;
+                found = true;
+                break;
+            }
         }
 
-        ta += c;
+        ta += found ? c : '?';
     }
 
     info.titleUtf8 = Sjis::toUtf8(ts);
 
     // Read CLUT
-    ptr = reinterpret_cast<uint8_t *>(data) + block * c_blockSize + 0x60;
+    ptr = reinterpret_cast<uint8_t*>(data) + block * c_blockSize + 0x60;
     std::memcpy(clut, ptr, 16 * sizeof(uint16_t));
 
     // Icons can have 1 to 3 frames of animation
     for (uint32_t i = 0; i < info.iconCount; i++) {
-        uint16_t *icon = &info.icon[i * 16 * 16];
-        ptr = reinterpret_cast<uint8_t *>(data) + block * c_blockSize + 128 + 128 * i;  // icon data
+        uint16_t* icon = &info.icon[i * 16 * 16];
+        ptr = reinterpret_cast<uint8_t*>(data) + block * c_blockSize + 128 + 128 * i;  // icon data
 
         // Fetch each pixel, store it in the icon array in ABBBBBGGGGGRRRRR with the alpha bit set to 1
         for (x = 0; x < 16 * 16; x++) {
@@ -454,7 +434,7 @@ void PCSX::SIO::getMcdBlockInfo(int mcd, int block, McdBlock &info) {
     }
 
     // Parse directory frame info
-    const auto directoryFrame = (uint8_t *)data + block * c_sectorSize;
+    const auto directoryFrame = (uint8_t*)data + block * c_sectorSize;
     uint32_t allocState = 0;
     allocState |= directoryFrame[0];
     allocState |= directoryFrame[1] << 8;
@@ -464,10 +444,10 @@ void PCSX::SIO::getMcdBlockInfo(int mcd, int block, McdBlock &info) {
 
     char tmp[17];
     memset(tmp, 0, sizeof(tmp));
-    std::strncpy(tmp, (const char *)&directoryFrame[0xa], 12);
+    std::strncpy(tmp, (const char*)&directoryFrame[0xa], 12);
     info.id = tmp;
     memset(tmp, 0, sizeof(tmp));
-    std::strncpy(tmp, (const char *)&directoryFrame[0x16], 16);
+    std::strncpy(tmp, (const char*)&directoryFrame[0x16], 16);
     info.name = tmp;
 
     uint32_t fileSize = 0;
@@ -492,7 +472,7 @@ void PCSX::SIO::getMcdBlockInfo(int mcd, int block, McdBlock &info) {
     }
 }
 
-char *PCSX::SIO::getMcdData(int mcd) {
+char* PCSX::SIO::getMcdData(int mcd) {
     switch (mcd) {
         case 1:
             return m_memoryCard[0].getMcdData();
@@ -507,15 +487,15 @@ char *PCSX::SIO::getMcdData(int mcd) {
 
 // Erase a memory card block by clearing it with 0s
 // mcd: The memory card we want to use (1 or 2)
-void PCSX::SIO::eraseMcdFile(const McdBlock &block) {
-    char *data = getMcdData(block.mcd);
+void PCSX::SIO::eraseMcdFile(const McdBlock& block) {
+    char* data = getMcdData(block.mcd);
 
     // Set the block data to 0
     const size_t offset = block.number * c_blockSize;
     std::memset(data + offset, 0, c_blockSize);
 
     // Fix up the corresponding directory frame in block 0.
-    const auto frame = (uint8_t *)data + block.number * c_sectorSize;
+    const auto frame = (uint8_t*)data + block.number * c_sectorSize;
     frame[0] = 0xa0;                   // Code for a freshly formatted block
     for (auto i = 1; i < 0x7f; i++) {  // Zero the rest of the frame
         frame[i] = 0;
@@ -609,7 +589,7 @@ bool PCSX::SIO::copyMcdFile(McdBlock block) {
 
         // Fix up the corresponding directory frame in block 0.
         if (prevBlock != -1) {
-            const auto frame = reinterpret_cast<uint8_t *>(otherData) + prevBlock * c_sectorSize;
+            const auto frame = reinterpret_cast<uint8_t*>(otherData) + prevBlock * c_sectorSize;
             uint8_t crcFix = frame[8] ^ (dstBlock - 1);
             frame[8] = dstBlock - 1;
             frame[0x7f] ^= crcFix;

@@ -63,6 +63,7 @@ class Assembly : private Disasm {
     bool m_delaySlotNotch = true;
     bool m_displayArrowForJumps = false;
     int m_numColumns = 4;
+    int m_region = 0;  // index into c_regions: which physical block the view shows
     char m_jumpAddressString[20];
     uint32_t m_previousPC = 0;
     FileDialog<> m_symbolsFileDialog;
@@ -92,6 +93,7 @@ class Assembly : private Disasm {
     virtual void OfB(int16_t offset, uint8_t reg, int size) final;
     virtual void BranchDest(uint32_t value) final;
     virtual void Offset(uint32_t addr, int size) final;
+    virtual void SyscallName(const char*) final;
     bool m_gotArg = false;
     bool m_notch = false;
     bool m_notchAfterSkip[2] = {false, false};

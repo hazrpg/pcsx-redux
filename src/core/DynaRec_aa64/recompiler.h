@@ -91,6 +91,22 @@ static void SPU_writeRegisterWrapper(uint32_t addr, uint16_t value) {
 static void write8Wrapper(uint32_t address, uint32_t value) { PCSX::g_emulator->m_mem->write8(address, value); }
 static void write16Wrapper(uint32_t address, uint32_t value) { PCSX::g_emulator->m_mem->write16(address, value); }
 static void write32Wrapper(uint32_t address, uint32_t value) { PCSX::g_emulator->m_mem->write32(address, value); }
+// LWL/LWR/SWL/SWR: msan only considers the bytes of the aligned word the instruction consumes or overwrites
+static uint32_t lwlReadWrapper(uint32_t address) {
+    return PCSX::g_emulator->m_mem->read32Masked(address & ~3, PCSX::Memory::leftByteMask(address));
+}
+static uint32_t lwrReadWrapper(uint32_t address) {
+    return PCSX::g_emulator->m_mem->read32Masked(address & ~3, PCSX::Memory::rightByteMask(address));
+}
+static uint32_t unalignedStoreReadWrapper(uint32_t address) {
+    return PCSX::g_emulator->m_mem->read32Masked(address, 0);
+}
+static void swlWriteWrapper(uint32_t address, uint32_t value) {
+    PCSX::g_emulator->m_mem->write32Masked(address & ~3, value, PCSX::Memory::leftByteMask(address));
+}
+static void swrWriteWrapper(uint32_t address, uint32_t value) {
+    PCSX::g_emulator->m_mem->write32Masked(address & ~3, value, PCSX::Memory::rightByteMask(address));
+}
 
 using DynarecCallback = void (*)();  // A function pointer to JIT-emitted code
 
@@ -110,14 +126,32 @@ class DynaRecCPU final : public PCSX::R3000Acpu {
     DynarecCallback m_returnFromBlock;  // Pointer to the code that will be executed when returning from a block
     DynarecCallback m_uncompiledBlock;  // Pointer to the code that will be executed when jumping to an uncompiled block
     DynarecCallback m_invalidBlock;     // Pointer to the code that will be executed the PC is invalid
+    DynarecCallback m_loadDelayHandler;  // Pointer to the code that will handle load delays at the start of a block
+    // Pointer to the code that will be executed when a block needs to be recompiled with full load delay support
+    DynarecCallback m_needFullLoadDelays;
 
     uint32_t m_pc;
+    unsigned m_instructionCount;     // Instructions compiled so far in the current block
+    unsigned m_romInstructionCount;  // How many of those were fetched from ROM
     Emitter gen;
 
     bool m_stopCompiling;  // Should we stop compiling code?
     bool m_pcWrittenBack;  // Has the PC been written back already by a jump?
     uint32_t m_ramSize;    // RAM is 2MB on retail units, 8MB on some DTL units (Can be toggled in GUI)
     const int MAX_BLOCK_SIZE = 50;
+
+    bool m_firstInstruction;        // Is the instruction being compiled the first one of the block?
+    bool m_fullLoadDelayEmulation;  // Should we emulate load delays that cross block boundaries?
+
+    // Used to hold info when we've got a load delay between the end of a block and the start of another
+    // For example, when there's an lw instruction in the delay slot of a branch
+    struct {
+        bool active;
+        int index;
+        uint32_t value;
+    } m_runtimeLoadDelay;
+
+    enum class LoadDelayDependencyType { NoDependency, DependencyInsideBlock, DependencyAcrossBlocks };
 
     enum class RegState { Unknown, Constant };
     enum class LoadingMode { DoNotLoad, Load };
@@ -161,6 +195,14 @@ class DynaRecCPU final : public PCSX::R3000Acpu {
     Reg m_gprs[32];
     std::array<HostRegister, ALLOCATEABLE_REG_COUNT> m_hostRegs;
     std::optional<uint32_t> m_linkedPC = std::nullopt;
+    // Address of the branch whose delay slot is being compiled. It is the previous word, except for the
+    // instruction at a taken branch's target when that branch had another branch in its slot: that
+    // second branch owns it, and an exception there reports it in EPC.
+    uint32_t m_slotBranchPC = 0;
+    std::optional<uint32_t> m_nestedSlotBranchPC = std::nullopt;
+    // The PC to hand the exception handler: the excepting instruction, or the branch it is the delay slot of plus 4
+    // so that the handler's EPC = PC - 4 for BD lands on that branch.
+    uint32_t exceptionPC() const { return m_inDelaySlot ? m_slotBranchPC + 4 : m_pc - 4; }
 
     template <LoadingMode mode = LoadingMode::Load>
     void reserveReg(int index);
@@ -178,13 +220,52 @@ class DynaRecCPU final : public PCSX::R3000Acpu {
     void flushRegs();
     void spillRegisterCache();
     void prepareForCall();
+    // The msan hardware registers take their arguments in $a0/$a1 (see psxhw.cc), so a 32-bit access to
+    // them, or to an address only known at runtime, needs syncArgumentRegisters first.
+    static bool usesArgumentRegisters(uint32_t addr, bool write) {
+        return addr == 0x1f802094 || (!write && (addr == 0x1f80208c || addr == 0x1f802090));
+    }
+    void syncArgumentRegisters();
     unsigned int m_allocatedRegisters = 0;  // how many registers have been allocated in this block?
 
     // Check if we're executing from valid memory
     inline bool isPcValid(uint32_t addr) { return m_recompilerLUT[addr >> 16] != m_dummyBlocks; }
 
+    // True for every branch and jump: REGIMM, J, JAL, BEQ, BNE, BLEZ, BGTZ, JR and JALR.
+    static bool isBranch(uint32_t code) {
+        const uint32_t op = code >> 26;
+        if (op == 0) return (code & 0x3e) == 0x08;  // JR, JALR
+        return op >= 1 && op <= 7;
+    }
+
+    // Target of the branch or jump in `code` if it is taken, when it is known at compile time.
+    // `pc` is the address after the branch, which is the base of a relative branch.
+    std::optional<uint32_t> staticBranchTarget(uint32_t code, uint32_t pc) {
+        const uint32_t op = code >> 26;
+        if (op == 1 || (op >= 4 && op <= 7)) return (uint32_t)((int16_t)code * 4) + pc;
+        if (op == 2 || op == 3) return (pc & 0xf0000000) | ((code & 0x03ffffff) << 2);
+        if (op == 0 && (code & 0x3e) == 0x08) {
+            const unsigned rs = (code >> 21) & 0x1f;
+            if (m_gprs[rs].isConst()) return m_gprs[rs].val & ~3;
+        }
+        return std::nullopt;
+    }
+
+    // A linking branch compiled with a moved base still links to its own address + 8.
+    void fixDelaySlotBranchLink(uint32_t code, uint32_t link) {
+        const uint32_t op = code >> 26;
+        if (op == 3 || (op == 1 && ((code >> 17) & 0xf) == 8)) {
+            markConst(31, link);
+        } else if (op == 0 && (code & 0x3f) == 0x09) {
+            const unsigned rd = (code >> 11) & 0x1f;
+            if (rd) markConst(rd, link);
+        }
+    }
+
     DynarecCallback* getBlockPointer(uint32_t pc);
-    DynarecCallback recompile(DynarecCallback* callback, uint32_t pc, bool align = true);
+    DynarecCallback recompile(DynarecCallback* callback, uint32_t pc, bool align = true,
+                              bool fullLoadDelayEmulation = false);
+    LoadDelayDependencyType getLoadDelayDependencyType(int index);
     void error();
     void flushCache();
     void handleLinking();
@@ -201,8 +282,9 @@ class DynaRecCPU final : public PCSX::R3000Acpu {
     static void recErrorWrapper(DynaRecCPU* that) { that->error(); }
 
     static void signalShellReached(DynaRecCPU* that);
-    static DynarecCallback recRecompileWrapper(DynaRecCPU* that, DynarecCallback* callback) {
-        return that->recompile(callback, that->m_regs.pc);
+    static DynarecCallback recRecompileWrapper(DynaRecCPU* that, DynarecCallback* callback,
+                                               bool fullLoadDelayEmulation) {
+        return that->recompile(callback, that->m_regs.pc, true, fullLoadDelayEmulation);
     }
 
     template <uint32_t pc>
@@ -335,9 +417,48 @@ class DynaRecCPU final : public PCSX::R3000Acpu {
     }
 
     void maybeCancelDelayedLoad(uint32_t index) {
+        // A load delay inherited from the previous block is only visible to the first instruction of this one, so
+        // that is the only place where it can be cancelled at runtime.
+        if (m_fullLoadDelayEmulation && m_firstInstruction) {
+            const auto indexOffset = (uintptr_t)&m_runtimeLoadDelay.index - (uintptr_t)this;
+            const auto isActiveOffset = (uintptr_t)&m_runtimeLoadDelay.active - (uintptr_t)this;
+            Label noDelayedLoad;
+
+            gen.Ldr(w4, MemOperand(contextPointer, indexOffset));
+            gen.Cmp(w4, index);
+            gen.B(&noDelayedLoad, ne);
+            gen.Strb(wzr, MemOperand(contextPointer, isActiveOffset));
+            gen.L(noDelayedLoad);
+        }
+
         const unsigned other = m_currentDelayedLoad ^ 1;
         if (m_delayedLoadInfo[other].index == index) {
             m_delayedLoadInfo[other].active = false;
+        }
+    }
+
+    // Park the value currently in w0 as a load delayed by one instruction, targeting guest register "index".
+    // Either processDelayedLoad picks it back up next instruction, or the load delay handler does at the start of
+    // the next block. Clobbers w4.
+    void storeDelayedLoad(unsigned index, LoadDelayDependencyType type) {
+        m_delayedLoadInfo[m_currentDelayedLoad].active = true;
+
+        if (type == LoadDelayDependencyType::DependencyAcrossBlocks) {
+            const auto valueOffset = (uintptr_t)&m_runtimeLoadDelay.value - (uintptr_t)this;
+            const auto isActiveOffset = (uintptr_t)&m_runtimeLoadDelay.active - (uintptr_t)this;
+            const auto indexOffset = (uintptr_t)&m_runtimeLoadDelay.index - (uintptr_t)this;
+
+            gen.Str(w0, MemOperand(contextPointer, valueOffset));
+            gen.Mov(w4, 1);
+            gen.Strb(w4, MemOperand(contextPointer, isActiveOffset));
+            gen.Mov(w4, index);
+            gen.Str(w4, MemOperand(contextPointer, indexOffset));
+        } else {
+            auto& delayedLoad = m_delayedLoadInfo[m_currentDelayedLoad];
+            const auto valueOffset = (uintptr_t)&delayedLoad.value - (uintptr_t)this;
+
+            delayedLoad.index = index;
+            gen.Str(w0, MemOperand(contextPointer, valueOffset));
         }
     }
 
@@ -358,6 +479,8 @@ class DynaRecCPU final : public PCSX::R3000Acpu {
     void recCFC2(uint32_t code);
     void recCOP0(uint32_t code);
     void recCOP2(uint32_t code);
+    void recCOP1or3(uint32_t code);
+    void recBCz(uint32_t code);
     void recCTC2(uint32_t code);
     void recDIV(uint32_t code);
     void recDIVU(uint32_t code);
@@ -443,15 +566,20 @@ class DynaRecCPU final : public PCSX::R3000Acpu {
     template <bool loadSR>
     void testSoftwareInterrupt();
 
+    void loadGTEDataRegister(Register dest, int index);
+
     template <int size, bool signExtend>
     void recompileLoad(uint32_t code);
+
+    template <int size, bool signExtend>
+    void recompileLoadWithDelay(uint32_t code, LoadDelayDependencyType type);
 
     const recompilationFunc m_recBSC[64] = {
         &DynaRecCPU::recSpecial, &DynaRecCPU::recREGIMM,  &DynaRecCPU::recJ,       &DynaRecCPU::recJAL,      // 00
         &DynaRecCPU::recBEQ,     &DynaRecCPU::recBNE,     &DynaRecCPU::recBLEZ,    &DynaRecCPU::recBGTZ,     // 04
         &DynaRecCPU::recADDIU,   &DynaRecCPU::recADDIU,   &DynaRecCPU::recSLTI,    &DynaRecCPU::recSLTIU,    // 08
         &DynaRecCPU::recANDI,    &DynaRecCPU::recORI,     &DynaRecCPU::recXORI,    &DynaRecCPU::recLUI,      // 0c
-        &DynaRecCPU::recCOP0,    &DynaRecCPU::recUnknown, &DynaRecCPU::recCOP2,    &DynaRecCPU::recUnknown,  // 10
+        &DynaRecCPU::recCOP0,    &DynaRecCPU::recCOP1or3, &DynaRecCPU::recCOP2,    &DynaRecCPU::recCOP1or3,  // 10
         &DynaRecCPU::recUnknown, &DynaRecCPU::recUnknown, &DynaRecCPU::recUnknown, &DynaRecCPU::recUnknown,  // 14
         &DynaRecCPU::recUnknown, &DynaRecCPU::recUnknown, &DynaRecCPU::recUnknown, &DynaRecCPU::recUnknown,  // 18
         &DynaRecCPU::recUnknown, &DynaRecCPU::recUnknown, &DynaRecCPU::recUnknown, &DynaRecCPU::recUnknown,  // 1c
