@@ -367,7 +367,8 @@ class UvFifoListener : public UvThreadOp {
     enum class Status { Stopped, Starting, Listening, Failed };
 
     UvFifoListener() {}
-    void start(unsigned port, uv_loop_t* loop, uv_async_t* async, std::function<void(UvFifo*)>&& cb);
+    void start(unsigned port, uv_loop_t* loop, uv_async_t* async, std::function<void(UvFifo*)>&& cb,
+               bool listenAll = false);
     void stop();
 
     Status status() const { return m_status.load(std::memory_order_acquire); }

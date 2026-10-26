@@ -99,7 +99,7 @@ class Server : public Endpoint {
   public:
     Server(std::string_view name) : Endpoint(name) {}
 
-    void start(uv_loop_t* loop, int port);
+    void start(uv_loop_t* loop, int port, bool listenAll = false);
     void stop() override;
 
     Status status() const override;
@@ -121,12 +121,13 @@ class Server : public Endpoint {
     // headless run has nothing else to tell the user.
     virtual void onFailed() {}
 
-    void restartNow(uv_loop_t* loop, int port) override { start(loop, port); }
+    void restartNow(uv_loop_t* loop, int port) override { start(loop, port, m_listenAll); }
 
   private:
     void onListenerEvent(UvFifo* fifo);
 
     UvFifoListener m_listener;
+    bool m_listenAll = false;
     // Heap allocated per start() and deleted by its own close callback. A value
     // member would have to be uv_async_init'd again while the previous close was
     // still in flight, which is exactly the handle-reuse hazard a restart would

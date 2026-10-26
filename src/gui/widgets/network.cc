@@ -107,7 +107,8 @@ bool PCSX::Widgets::Network::draw(GUI* gui, const char* title) {
             changed = true;
             if (debugSettings.get<Emulator::DebugSettings::GdbServer>()) {
                 g_emulator->m_gdbServer->start(g_system->getLoop(),
-                                               debugSettings.get<Emulator::DebugSettings::GdbServerPort>());
+                                               debugSettings.get<Emulator::DebugSettings::GdbServerPort>(),
+                                               debugSettings.get<Emulator::DebugSettings::GdbServerListenAll>());
             } else {
                 g_emulator->m_gdbServer->stop();
             }
@@ -119,6 +120,11 @@ You also need to enable the debugger.)"));
             ImGui::InputInt(_("GDB Server Port"), &debugSettings.get<Emulator::DebugSettings::GdbServerPort>().value);
         ImGuiHelpers::ShowHelpMarker(_(R"(A port change only takes effect on the
 next restart of the server.)"));
+        changed |= ImGui::Checkbox(_("Listen on all interfaces"),
+                                   &debugSettings.get<Emulator::DebugSettings::GdbServerListenAll>().value);
+        ImGuiHelpers::ShowHelpMarker(_(R"(Binds 0.0.0.0 instead of 127.0.0.1.
+Only enable this if you need remote access; the
+GDB server has no authentication.)"));
         changed |=
             ImGui::Checkbox(_("GDB send manifest"), &debugSettings.get<Emulator::DebugSettings::GdbManifest>().value);
         ImGuiHelpers::ShowHelpMarker(_(R"(Enables sending the processor's manifest
@@ -153,7 +159,8 @@ the gdb server system itself.)"));
             changed = true;
             if (debugSettings.get<Emulator::DebugSettings::WebServer>()) {
                 g_emulator->m_webServer->start(g_system->getLoop(),
-                                               debugSettings.get<Emulator::DebugSettings::WebServerPort>());
+                                               debugSettings.get<Emulator::DebugSettings::WebServerPort>(),
+                                               debugSettings.get<Emulator::DebugSettings::WebServerListenAll>());
             } else {
                 g_emulator->m_webServer->stop();
             }
@@ -165,6 +172,11 @@ https://pcsx-redux.consoledev.net/web_server/ for details.)"));
             ImGui::InputInt(_("Web Server Port"), &debugSettings.get<Emulator::DebugSettings::WebServerPort>().value);
         ImGuiHelpers::ShowHelpMarker(_(R"(A port change only takes effect on the
 next restart of the server.)"));
+        changed |= ImGui::Checkbox(_("Listen on all interfaces"),
+                                   &debugSettings.get<Emulator::DebugSettings::WebServerListenAll>().value);
+        ImGuiHelpers::ShowHelpMarker(_(R"(Binds 0.0.0.0 instead of 127.0.0.1.
+Only enable this if you need remote access to the
+web server or the MCP endpoint.)"));
 
         ImGui::Separator();
         changed |=
@@ -199,7 +211,8 @@ Empty means the user's home directory.)"));
             changed = true;
             if (debugSettings.get<Emulator::DebugSettings::SIO1Server>()) {
                 g_emulator->m_sio1Server->start(g_system->getLoop(),
-                                                debugSettings.get<Emulator::DebugSettings::SIO1ServerPort>());
+                                                debugSettings.get<Emulator::DebugSettings::SIO1ServerPort>(),
+                                                debugSettings.get<Emulator::DebugSettings::SIO1ServerListenAll>());
             } else {
                 g_emulator->m_sio1Server->stop();
             }
@@ -210,6 +223,11 @@ See https://pcsx-redux.consoledev.net/sio1_networking/
 for details.)"));
         changed |=
             ImGui::InputInt(_("SIO1 Server Port"), &debugSettings.get<Emulator::DebugSettings::SIO1ServerPort>().value);
+        changed |= ImGui::Checkbox(_("Listen on all interfaces"),
+                                   &debugSettings.get<Emulator::DebugSettings::SIO1ServerListenAll>().value);
+        ImGuiHelpers::ShowHelpMarker(_(R"(Binds 0.0.0.0 instead of 127.0.0.1.
+Only enable this if you need remote access; the
+SIO1 server has no authentication.)"));
 
         ImGui::Separator();
 

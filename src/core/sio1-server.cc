@@ -43,7 +43,8 @@ PCSX::SIO1Server::SIO1Server() : Network::Server("SIO1 Server"), m_listener(g_sy
     m_listener.listen<Events::SettingsLoaded>([this](const auto &event) {
         auto &debugSettings = g_emulator->settings.get<Emulator::SettingDebugSettings>();
         if (debugSettings.get<Emulator::DebugSettings::SIO1Server>() && !isRunning()) {
-            start(g_system->getLoop(), debugSettings.get<Emulator::DebugSettings::SIO1ServerPort>());
+            start(g_system->getLoop(), debugSettings.get<Emulator::DebugSettings::SIO1ServerPort>(),
+                  debugSettings.get<Emulator::DebugSettings::SIO1ServerListenAll>());
         }
     });
     m_listener.listen<Events::Quitting>([this](const auto &event) {
