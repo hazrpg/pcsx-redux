@@ -177,6 +177,19 @@ AI tools query and control the emulator in real time.)"));
         ImGuiHelpers::ShowHelpMarker(_(R"(MCP is served through the web server.
 If the web server is disabled, enabling MCP
 reuses this port as the web server port.)"));
+        changed |= ImGui::InputText(_("MCP Auth Token"),
+                                    &debugSettings.get<Emulator::DebugSettings::MCPServerToken>().value,
+                                    ImGuiInputTextFlags_Password);
+        ImGuiHelpers::ShowHelpMarker(_(R"(When non-empty, MCP requests must send
+this token as an Authorization: Bearer header.)"));
+        changed |=
+            ImGui::Checkbox(_("MCP Read-Only"), &debugSettings.get<Emulator::DebugSettings::MCPServerReadOnly>().value);
+        ImGuiHelpers::ShowHelpMarker(_(R"(Refuse MCP tools that modify the
+emulator state.)"));
+        changed |= ImGui::InputText(_("MCP Dump Root"),
+                                    &debugSettings.get<Emulator::DebugSettings::MCPServerDumpRoot>().value);
+        ImGuiHelpers::ShowHelpMarker(_(R"(Directory that dump_memory may write into.
+Empty means the user's home directory.)"));
     }
 
     // -- SIO1 --

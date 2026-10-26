@@ -134,6 +134,9 @@ class Emulator {
         typedef Setting<int, TYPESTRING("WebServerPort"), 8080> WebServerPort;
         typedef Setting<bool, TYPESTRING("MCPServer"), false> MCPServer;
         typedef Setting<int, TYPESTRING("MCPServerPort"), 32769> MCPServerPort;
+        typedef SettingString<TYPESTRING("MCPServerToken")> MCPServerToken;
+        typedef Setting<bool, TYPESTRING("MCPServerReadOnly"), false> MCPServerReadOnly;
+        typedef SettingString<TYPESTRING("MCPServerDumpRoot")> MCPServerDumpRoot;
         typedef Setting<uint32_t, TYPESTRING("KernelCallA0_00_1f"), 0xffffffff> KernelCallA0_00_1f;
         typedef Setting<uint32_t, TYPESTRING("KernelCallA0_20_3f"), 0xffffffff> KernelCallA0_20_3f;
         typedef Setting<uint32_t, TYPESTRING("KernelCallA0_40_5f"), 0xffffffff> KernelCallA0_40_5f;
@@ -161,7 +164,8 @@ class Emulator {
         typedef Setting<SIO1Mode, TYPESTRING("SIO1Mode"), SIO1Mode::Protobuf> SIO1ModeSetting;
         typedef Settings<Debug, Trace, KernelLog, FirstChanceException, SkipISR, LoggingCDROM, LoggingHWCDROM,
                          GdbServer, GdbManifest, GdbLogSetting, GdbServerPort, GdbServerTrace, WebServer, WebServerPort,
-                         MCPServer, MCPServerPort, KernelCallA0_00_1f, KernelCallA0_20_3f, KernelCallA0_40_5f,
+                         MCPServer, MCPServerPort, MCPServerToken, MCPServerReadOnly, MCPServerDumpRoot,
+                         KernelCallA0_00_1f, KernelCallA0_20_3f, KernelCallA0_40_5f,
                          KernelCallA0_60_7f, KernelCallA0_80_9f, KernelCallA0_a0_bf, KernelCallB0_00_1f,
                          KernelCallB0_20_3f, KernelCallB0_40_5f, KernelCallC0_00_1f, DemangledSymbols, PCdrv, PCdrvBase,
                          PCdrvNet, PCdrvNetAllow, SIO1Server, SIO1ServerPort, SIO1Client, SIO1ClientHost,

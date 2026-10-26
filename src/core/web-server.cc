@@ -27,7 +27,6 @@
 #include <uv.h>
 
 #include <algorithm>
-#include <cctype>
 #include <charconv>
 #include <magic_enum/magic_enum_all.hpp>
 #include <map>
@@ -60,29 +59,16 @@ using nlohmann::json;
 
 namespace {
 
-bool WantsSSE(const PCSX::RequestData& request) {
-    auto isEventStreamHeader = [](const std::string& value) {
-        std::string lowered = value;
-        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        return lowered.find("text/event-stream") != std::string::npos;
-    };
-    for (const auto& header : request.headers) {
-        if (PCSX::StringsHelpers::strcasecmp(header.first, "Accept")) {
-            if (isEventStreamHeader(header.second)) {
-                return true;
-            }
-        }
-    }
-    if (!request.urlData.query.empty()) {
-        std::string loweredQuery = request.urlData.query;
-        std::transform(loweredQuery.begin(), loweredQuery.end(), loweredQuery.begin(),
-                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-        if ((loweredQuery.find("transport=sse") != std::string::npos) ||
-            (loweredQuery.find("stream=sse") != std::string::npos) ||
-            (loweredQuery.find("sse=true") != std::string::npos)) {
-            return true;
-        }
+static bool hasValidMCPToken(const PCSX::RequestData& request) {
+    const auto& settings = PCSX::g_emulator->settings.get<PCSX::Emulator::SettingDebugSettings>();
+    const std::string& token = settings.get<PCSX::Emulator::DebugSettings::MCPServerToken>().value;
+    if (token.empty()) return true;
+    constexpr std::string_view prefix = "Bearer ";
+    for (const auto& [key, value] : request.headers) {
+        if (!PCSX::StringsHelpers::strcasecmp(key, "Authorization")) continue;
+        if (value.size() <= prefix.size()) continue;
+        if (!PCSX::StringsHelpers::strcasecmp(std::string_view(value).substr(0, prefix.size()), prefix)) continue;
+        return std::string_view(value).substr(prefix.size()) == token;
     }
     return false;
 }
@@ -800,13 +786,27 @@ class MCPExecutor : public PCSX::WebExecutor {
     virtual bool match(PCSX::WebClient* client, const PCSX::UrlData& urldata) final { return urldata.path == "/mcp"; }
     virtual bool execute(PCSX::WebClient* client, PCSX::RequestData& request) final {
         if (request.method == PCSX::RequestData::Method::HTTP_POST) {
+            if (!hasValidMCPToken(request)) {
+                client->write(
+                    "HTTP/1.1 401 Unauthorized\r\n"
+                    "Content-Type: application/json\r\n"
+                    "Access-Control-Allow-Origin: *\r\n\r\n"
+                    "{\"jsonrpc\":\"2.0\",\"id\":null,\"error\":{\"code\":-32001,\"message\":\"Unauthorized\"}}");
+                return true;
+            }
             try {
                 std::string response_str = PCSX::MCPServer::HandleMCPRequest(request.body.asString());
-                client->write(
-                    "HTTP/1.1 200 OK\r\n"
-                    "Content-Type: application/json\r\n"
-                    "Content-Length: " +
-                    std::to_string(response_str.size()) + "\r\n\r\n" + response_str);
+                if (response_str.empty()) {
+                    // JSON-RPC notification: no response body.
+                    client->write("HTTP/1.1 202 Accepted\r\nContent-Length: 0\r\n\r\n");
+                } else {
+                    client->write(
+                        "HTTP/1.1 200 OK\r\n"
+                        "Content-Type: application/json\r\n"
+                        "Access-Control-Allow-Origin: *\r\n"
+                        "Content-Length: " +
+                        std::to_string(response_str.size()) + "\r\n\r\n" + response_str);
+                }
             } catch (const json::parse_error& e) {
                 json error_response = {
                     {"jsonrpc", "2.0"},
@@ -819,25 +819,12 @@ class MCPExecutor : public PCSX::WebExecutor {
             client->write(
                 "HTTP/1.1 204 No Content\r\n"
                 "Access-Control-Allow-Origin: *\r\n"
-                "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
-                "Access-Control-Allow-Headers: Content-Type\r\n"
+                "Access-Control-Allow-Methods: POST, OPTIONS\r\n"
+                "Access-Control-Allow-Headers: Content-Type, Authorization\r\n"
                 "Access-Control-Max-Age: 86400\r\n\r\n");
             return true;
         } else if (request.method == PCSX::RequestData::Method::HTTP_HTTP_GET) {
-            if (WantsSSE(request)) {
-                request.keepAlive = true;
-                client->write(
-                    "HTTP/1.1 200 OK\r\n"
-                    "Content-Type: text/event-stream\r\n"
-                    "Cache-Control: no-cache\r\n"
-                    "Connection: keep-alive\r\n"
-                    "Access-Control-Allow-Origin: *\r\n\r\n");
-                client->write(
-                    "event: ping\r\n"
-                    "data: {}\r\n\r\n");
-            } else {
-                client->write("HTTP/1.1 405 Method Not Allowed\r\nAllow: POST, OPTIONS\r\n\r\n");
-            }
+            client->write("HTTP/1.1 405 Method Not Allowed\r\nAllow: POST, OPTIONS\r\n\r\n");
             return true;
         }
         return false;

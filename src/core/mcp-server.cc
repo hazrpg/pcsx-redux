@@ -19,7 +19,10 @@
 
 #include "mcp-server.h"
 
+#include <bit>
 #include <cctype>
+#include <cstdlib>
+#include <charconv>
 #include <chrono>
 #include <cstring>
 #include <ctime>
@@ -32,6 +35,7 @@
 #include <sstream>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <vector>
 
@@ -40,7 +44,6 @@
 #include "core/cdrom.h"
 #include "core/debug.h"
 #include "core/disr3000a.h"
-#include "core/gpulogger.h"
 #include "core/pad.h"
 #include "core/sstate.h"
 #include "third_party/json.hpp"
@@ -52,25 +55,40 @@ MCPServer::Config MCPServer::config_;
 std::unordered_map<uint32_t, MCPServer::Breakpoint> MCPServer::breakpoints_;
 std::unordered_map<std::string, MCPServer::Tool> MCPServer::tools_;
 
-// Helper function to parse address from JSON (supports hex strings or numeric values)
+// Helper function to parse an address from JSON. Numbers are decimal; strings
+// are hexadecimal, with an optional 0x prefix. This matches how the debugger
+// and the Ghidra scripts display addresses.
 static uint32_t parseAddress(const nlohmann::json& value) {
-    if (value.is_string()) {
-        std::string str = value.get<std::string>();
-        // Support hex strings like "0x80010000" or "80010000"
-        uint32_t addr;
-        std::stringstream ss;
-        if (str.find("0x") == 0 || str.find("0X") == 0) {
-            ss << std::hex << str.substr(2);
-        } else {
-            // Try to parse as hex first, then decimal
-            ss << std::hex << str;
-        }
-        ss >> addr;
-        return addr;
-    } else if (value.is_number()) {
-        return value.get<uint32_t>();
+    if (value.is_number_unsigned()) {
+        uint64_t v = value.get<uint64_t>();
+        if (v > 0xFFFFFFFFull) throw std::runtime_error("Address out of range");
+        return static_cast<uint32_t>(v);
     }
-    throw std::runtime_error("Address must be a number or hex string");
+    if (value.is_number_integer()) {
+        int64_t v = value.get<int64_t>();
+        if (v < 0 || v > 0xFFFFFFFFll) throw std::runtime_error("Address out of range");
+        return static_cast<uint32_t>(v);
+    }
+    if (value.is_number_float()) {
+        double v = value.get<double>();
+        if (v < 0.0 || v > 4294967295.0) throw std::runtime_error("Address out of range");
+        return static_cast<uint32_t>(v);
+    }
+    if (!value.is_string()) {
+        throw std::runtime_error("Address must be an integer or a hexadecimal string");
+    }
+    std::string str = value.get<std::string>();
+    std::string_view sv = str;
+    if (sv.size() > 2 && (sv.substr(0, 2) == "0x" || sv.substr(0, 2) == "0X")) {
+        sv.remove_prefix(2);
+    }
+    if (sv.empty()) throw std::runtime_error("Empty address");
+    uint32_t address = 0;
+    const auto [ptr, ec] = std::from_chars(sv.data(), sv.data() + sv.size(), address, 16);
+    if (ec != std::errc() || ptr != sv.data() + sv.size()) {
+        throw std::runtime_error("Invalid hexadecimal address: '" + str + "'");
+    }
+    return address;
 }
 
 // Helper to get required string parameter with validation
@@ -104,55 +122,183 @@ static uint32_t getRequiredNumber(const nlohmann::json& args, const std::string&
     return args.at(key).get<uint32_t>();
 }
 
-void MCPServer::RegisterToolsIfNeeded() {
-    if (!tools_.empty()) {
-        return;
+bool MCPServer::ReadGuestMemory(uint32_t address, uint32_t length, std::vector<uint8_t>& out) {
+    if (!g_emulator || !g_emulator->m_mem) return false;
+    out.clear();
+    if (length == 0) return true;
+
+    // Map the KSEG mirrors back to physical addresses.
+    uint32_t phys = address;
+    if (phys >= 0x80000000 && phys < 0xC0000000) phys &= 0x1FFFFFFF;
+
+    auto& mem = g_emulator->m_mem;
+    const bool ramExpansion = g_emulator->settings.get<Emulator::Setting8MB>();
+    const uint32_t ramSize = ramExpansion ? 0x00800000 : 0x00200000;
+
+    const uint8_t* src = nullptr;
+    uint32_t base = 0;
+    uint32_t size = 0;
+    if (phys < ramSize) {
+        src = mem->m_wram;
+        base = 0;
+        size = ramSize;
+    } else if (phys >= 0x1F800000 && phys < 0x1F800400) {
+        src = mem->m_hard;
+        base = 0x1F800000;
+        size = 0x400;
+    } else if (phys >= 0x1FC00000 && phys < 0x1FC80000) {
+        src = mem->m_bios;
+        base = 0x1FC00000;
+        size = 0x80000;
+    } else if (phys >= 0x1F000000 && phys < 0x1F800000) {
+        src = mem->m_exp1;
+        base = 0x1F000000;
+        size = 0x800000;
+    } else {
+        return false;
     }
-    tools_["get_cpu_state"] = {"get_cpu_state", "Get current CPU state"};
-    tools_["get_memory_map"] = {"get_memory_map", "Get the PSX memory map"};
-    tools_["get_memory_range"] = {"get_memory_range", "Get a range of memory (address, length)"};
-    tools_["hexdump"] = {"hexdump", "Get a hex dump of memory region"};
-    tools_["find_string"] = {"find_string", "Search for strings in memory"};
-    tools_["search_bytes"] = {"search_bytes", "Search for byte patterns in memory"};
-    tools_["get_gpu_state"] = {"get_gpu_state", "Get current GPU state"};
-    tools_["list_gpu_commands"] = {"list_gpu_commands", "List current GPU command queue"};
-    tools_["list_hardware_registers"] = {"list_hardware_registers", "List all available hardware registers"};
-    tools_["read_hardware_register"] = {"read_hardware_register", "Read a specific hardware register value"};
-    tools_["write_hardware_register"] = {"write_hardware_register", "Write a value to a hardware register"};
-    tools_["get_dma_state"] = {"get_dma_state", "Get current DMA channel states"};
-    tools_["set_breakpoint"] = {"set_breakpoint", "Set a breakpoint at the given address"};
-    tools_["get_breakpoints"] = {"get_breakpoints", "List all active breakpoints"};
-    tools_["clear_breakpoint"] = {"clear_breakpoint", "Clear a breakpoint at the given address"};
-    tools_["get_call_chain"] = {"get_call_chain", "Trace the call chain from the current instruction"};
-    tools_["get_call_graph"] = {"get_call_graph", "Get function call graph for a specific function"};
-    tools_["get_emulator_state"] = {"get_emulator_state", "Get comprehensive emulator state"};
-    tools_["is_game_loaded"] = {"is_game_loaded", "Check if a game/ISO is currently loaded and running"};
 
-    // Execution control tools
-    tools_["pause"] = {"pause", "Pause emulator execution"};
-    tools_["resume"] = {"resume", "Resume emulator execution"};
-    tools_["step_in"] = {"step_in", "Step into next instruction"};
-    tools_["step_over"] = {"step_over", "Step over next instruction (skip function calls)"};
-    tools_["step_out"] = {"step_out", "Step out of current function"};
-    tools_["run_to_address"] = {"run_to_address", "Run emulator until specified address (address)"};
-    tools_["get_execution_state"] = {"get_execution_state", "Get current execution state (running/paused)"};
-    tools_["how_to_use_mcp"] = {"how_to_use_mcp", "Get AI-friendly guide on how to use MCP tools effectively"};
+    const uint32_t offset = phys - base;
+    if (offset >= size || length > size - offset) return false;
+    out.assign(src + offset, src + offset + length);
+    return true;
+}
 
-    // Dynamic extraction tools for reverse engineering
-    tools_["dump_memory"] = {"dump_memory",
-                             "Dump a memory region to a .bin file + .json manifest (address, length, tag, output_dir)"};
-    tools_["snapshot_ram"] = {"snapshot_ram", "Dump full 2MB WRAM to a .bin file + .json manifest (tag, output_dir)"};
-    tools_["vram_dump"] = {"vram_dump", "Write the raw 1024x512 16-bit VRAM to a file (path)"};
-    tools_["screenshot"] = {"screenshot", "Write the current framebuffer as a binary PPM to a file (path)"};
-    tools_["write_memory"] = {"write_memory", "Write 8, 16 or 32 bits to guest memory (address, value, size)"};
-    tools_["save_state"] = {"save_state", "Serialize the emulator state to a file (path)"};
-    tools_["load_state"] = {"load_state", "Load a serialized emulator state from a file (path)"};
+std::filesystem::path MCPServer::AllowedDumpRoot() {
+    if (g_emulator) {
+        const auto& settings = g_emulator->settings.get<Emulator::SettingDebugSettings>();
+        const std::string& configured = settings.get<Emulator::DebugSettings::MCPServerDumpRoot>().value;
+        if (!configured.empty()) return std::filesystem::weakly_canonical(configured);
+    }
+    const char* home = std::getenv("HOME");
+#ifdef _WIN32
+    if (!home) home = std::getenv("USERPROFILE");
+#endif
+    if (home && *home) return std::filesystem::weakly_canonical(home);
+    return std::filesystem::current_path();
+}
+
+bool MCPServer::IsPathWithin(const std::filesystem::path& root, const std::filesystem::path& target) {
+    const auto rel = std::filesystem::relative(target, root);
+    if (rel.empty()) return false;
+    auto it = rel.begin();
+    return !(it != rel.end() && *it == "..");
+}
+
+bool MCPServer::ResolveHostPath(const std::string& path, std::filesystem::path& out, std::string& error) {
+    const auto root = AllowedDumpRoot();
+    std::filesystem::path p(path);
+    if (p.is_relative()) p = root / p;
+    std::error_code ec;
+    out = std::filesystem::weakly_canonical(p, ec);
+    if (ec) {
+        error = "Invalid path: " + path;
+        return false;
+    }
+    if (!IsPathWithin(root, out)) {
+        error = "Path must be inside " + root.string();
+        return false;
+    }
+    return true;
+}
+
+void MCPServer::RegisterToolsIfNeeded() {
+    if (!tools_.empty()) return;
+
+    const char* ADDR =
+        R"({"type":["string","integer"],"description":"Guest address: hex string (0x80010000) or decimal integer"})";
+    const char* LEN = R"({"type":"integer","minimum":1,"maximum":8388608,"description":"Number of bytes"})";
+    const char* REGION = R"({"type":"string","enum":["ram","bios"],"description":"Memory region to read"})";
+    const char* PATH = R"({"type":"string","description":"Host filesystem path"})";
+    const char* OUTDIR = R"({"type":"string","description":"Directory under the configured MCP dump root"})";
+    const char* TAG = R"({"type":"string","description":"Label used in the output filename"})";
+    const char* REG = R"({"type":"string","description":"Hardware register name"})";
+    const char* DEPTH = R"({"type":"integer","minimum":1,"maximum":64})";
+
+    auto prop = [](const char* json) { return nlohmann::json::parse(json); };
+    auto schema = [](nlohmann::json properties, nlohmann::json required = nlohmann::json::array()) {
+        nlohmann::json s;
+        s["type"] = "object";
+        s["properties"] = std::move(properties);
+        if (!required.empty()) s["required"] = std::move(required);
+        return s.dump();
+    };
+
+    tools_["get_cpu_state"] = {"get_cpu_state", "Get current CPU state", schema({})};
+    tools_["get_memory_map"] = {"get_memory_map", "Get the PSX memory map", schema({})};
+    tools_["get_memory_range"] = {"get_memory_range", "Read a range of guest memory",
+                                  schema({{"address", prop(ADDR)}, {"length", prop(LEN)}}, {"address", "length"})};
+    tools_["hexdump"] = {"hexdump", "Hex dump of a memory region",
+                         schema({{"address", prop(ADDR)}, {"length", prop(LEN)}}, {"address", "length"})};
+    tools_["find_string"] = {"find_string", "Search for a string in a memory region",
+                             schema({{"pattern", prop(R"({"type":"string"})")},
+                                     {"region", prop(REGION)}},
+                                    {"pattern"})};
+    tools_["search_bytes"] = {"search_bytes", "Search for a hexadecimal byte pattern in a memory region",
+                              schema({{"pattern", prop(R"({"type":"string","description":"Hex bytes, e.g. 0a1b2c"})")},
+                                      {"region", prop(REGION)}},
+                                     {"pattern"})};
+    tools_["get_gpu_state"] = {"get_gpu_state", "Get the GPU status register and parsed display mode", schema({})};
+    tools_["list_hardware_registers"] = {"list_hardware_registers", "List known hardware register names", schema({})};
+    tools_["read_hardware_register"] = {"read_hardware_register", "Read a hardware register",
+                                        schema({{"register", prop(REG)}}, {"register"})};
+    tools_["write_hardware_register"] = {"write_hardware_register", "Write a hardware register",
+                                         schema({{"register", prop(REG)},
+                                                 {"value", prop(R"({"type":["string","integer"]})")}},
+                                                {"register", "value"})};
+    tools_["get_dma_state"] = {"get_dma_state", "Get a DMA channel's registers",
+                               schema({{"channel", prop(R"({"type":"integer","minimum":0,"maximum":6})")}},
+                                      {"channel"})};
+    tools_["set_breakpoint"] = {"set_breakpoint", "Set an execution breakpoint",
+                                schema({{"address", prop(ADDR)}}, {"address"})};
+    tools_["get_breakpoints"] = {"get_breakpoints", "List active breakpoints", schema({})};
+    tools_["clear_breakpoint"] = {"clear_breakpoint", "Clear an execution breakpoint",
+                                  schema({{"address", prop(ADDR)}}, {"address"})};
+    tools_["get_call_chain"] = {"get_call_chain", "Trace the call chain from the current instruction",
+                                schema({{"max_depth", prop(DEPTH)}})};
+    tools_["get_call_graph"] = {"get_call_graph", "Get the callers and callees of a function",
+                                schema({{"function", prop(R"({"type":"string","description":"Function name or 0x address"})")},
+                                        {"depth", prop(DEPTH)}},
+                                       {"function"})};
+    tools_["get_emulator_state"] = {"get_emulator_state", "Get a comprehensive emulator snapshot", schema({})};
+    tools_["is_game_loaded"] = {"is_game_loaded", "Check whether a game is loaded and running", schema({})};
+
+    tools_["pause"] = {"pause", "Pause emulator execution", schema({})};
+    tools_["resume"] = {"resume", "Resume emulator execution", schema({})};
+    tools_["step_in"] = {"step_in", "Step into the next instruction", schema({})};
+    tools_["step_over"] = {"step_over", "Step over the next instruction", schema({})};
+    tools_["step_out"] = {"step_out", "Step out of the current function", schema({})};
+    tools_["run_to_address"] = {"run_to_address", "Run until the given address is reached",
+                                schema({{"address", prop(ADDR)}}, {"address"})};
+    tools_["get_execution_state"] = {"get_execution_state", "Get the running/paused state", schema({})};
+    tools_["how_to_use_mcp"] = {"how_to_use_mcp", "Get an AI-friendly usage guide", schema({})};
+
+    tools_["dump_memory"] = {"dump_memory", "Dump a memory region to a .bin file and a .json manifest",
+                             schema({{"address", prop(ADDR)}, {"length", prop(LEN)}, {"tag", prop(TAG)},
+                                     {"output_dir", prop(OUTDIR)}},
+                                    {"address", "length", "tag", "output_dir"})};
+    tools_["snapshot_ram"] = {"snapshot_ram", "Dump the full 2 MB of main RAM",
+                              schema({{"tag", prop(TAG)}, {"output_dir", prop(OUTDIR)}}, {"tag", "output_dir"})};
+    tools_["vram_dump"] = {"vram_dump", "Write raw 16-bit VRAM to a file", schema({{"path", prop(PATH)}}, {"path"})};
+    tools_["screenshot"] = {"screenshot", "Write the current framebuffer as a binary PPM",
+                            schema({{"path", prop(PATH)}}, {"path"})};
+    tools_["write_memory"] = {"write_memory", "Write 8, 16 or 32 bits to guest memory",
+                              schema({{"address", prop(ADDR)},
+                                      {"value", prop(R"({"type":"integer"})")},
+                                      {"size", prop(R"({"type":"integer","enum":[8,16,32],"default":32})")}},
+                                     {"address", "value"})};
+    tools_["save_state"] = {"save_state", "Serialize the emulator state to a file",
+                            schema({{"path", prop(PATH)}}, {"path"})};
+    tools_["load_state"] = {"load_state", "Load a serialized emulator state from a file",
+                            schema({{"path", prop(PATH)}}, {"path"})};
     tools_["pad_set"] = {"pad_set",
-                         "Set controller 1 buttons. pressed is a bitmask (1=pressed): "
-                         "0 Select,1 L3,2 R3,3 Start,4 Up,5 Right,6 Down,7 Left,8 L2,9 R2,"
-                         "10 L1,11 R1,12 Triangle,13 Circle,14 Cross,15 Square. "
-                         "frames=0 holds until pad_clear."};
-    tools_["pad_clear"] = {"pad_clear", "Release the controller override set by pad_set"};
+                         "Set controller 1 buttons. pressed is a bitmask (1=pressed): 0 Select, 1 L3, 2 R3, "
+                         "3 Start, 4 Up, 5 Right, 6 Down, 7 Left, 8 L2, 9 R2, 10 L1, 11 R1, 12 Triangle, "
+                         "13 Circle, 14 Cross, 15 Square. frames=0 holds until pad_clear.",
+                         schema({{"pressed", prop(R"({"type":"integer","minimum":0,"maximum":65535})")},
+                                 {"frames", prop(R"({"type":"integer","minimum":0,"default":0})")}},
+                                {"pressed"})};
+    tools_["pad_clear"] = {"pad_clear", "Release the controller override set by pad_set", schema({})};
 }
 
 std::vector<MCPServer::Tool> MCPServer::ListTools() {
@@ -191,9 +337,6 @@ MCPServer::ToolResult MCPServer::ExecuteTool(const std::string& tool_name, const
             return ToolSearchBytes(pattern, region);
         } else if (tool_name == "get_gpu_state") {
             return ToolGetGPUState();
-        } else if (tool_name == "list_gpu_commands") {
-            uint32_t limit = args.value("limit", 20);
-            return ToolListGPUCommands(limit);
         } else if (tool_name == "list_hardware_registers") {
             return ToolListHardwareRegisters();
         } else if (tool_name == "read_hardware_register") {
@@ -395,38 +538,51 @@ MCPServer::MemoryState MCPServer::GetMemoryState() {
     return state;
 }
 
+namespace {
+uint32_t readHardwareWord(const uint8_t* hard, uint16_t offset) {
+    uint32_t value;
+    std::memcpy(&value, hard + offset, sizeof(value));
+    if constexpr (std::endian::native == std::endian::big) {
+        value = ((value & 0x000000FFu) << 24) | ((value & 0x0000FF00u) << 8) | ((value & 0x00FF0000u) >> 8) |
+                ((value & 0xFF000000u) >> 24);
+    }
+    return value;
+}
+
+template <unsigned N, typename Mem>
+MCPServer::HardwareState::DMAChannel dmaChannel(Mem& mem) {
+    MCPServer::HardwareState::DMAChannel channel{};
+    channel.address = mem->template getMADR<N>();
+    channel.value = mem->template getCHCR<N>();
+    channel.active = mem->template isDMABusy<N>();
+    channel.transfer_mode = (channel.value >> 9) & 0x7;
+    channel.transfer_count = mem->template getBCR<N>();
+    return channel;
+}
+}  // namespace
+
 MCPServer::GPUState MCPServer::GetGPUState() {
     GPUState state = {};
-    if (g_emulator && g_emulator->m_gpu) {
-        state.status = g_emulator->m_gpu->readStatus();
-        // Note: Other GPU registers may not be directly accessible
-        // The status register contains most useful GPU state information
-        state.gpu_read = 0;  // Would need GPU-specific interface
-        state.gpu_reg = 0;   // Would need GPU-specific interface
-        state.gp1 = 0;       // Would need GPU-specific interface
-        state.dirty_flag = false;
-        state.display_mode = {0, 0, 0, 0};  // Parsed from status if needed
-    }
+    if (!g_emulator || !g_emulator->m_gpu) return state;
+    state.status = g_emulator->m_gpu->readStatus();
+    static constexpr uint32_t widths[4] = {256, 320, 512, 640};
+    state.display_mode.width = widths[(state.status >> 17) & 3];
+    state.display_mode.height = ((state.status >> 19) & 1) ? 480 : 240;
+    state.display_mode.refresh_rate = ((state.status >> 20) & 1) ? 50 : 60;
     return state;
 }
 
 MCPServer::HardwareState MCPServer::GetHardwareState() {
     HardwareState state = {};
-    if (g_emulator && g_emulator->m_gpu && g_emulator->m_counters /* && g_emulator->m_hw for DMA */) {  // m_hw for DMA
-        // GPU
-        state.gpu = {0, 0, 0, 0};  // TODO: Populate with actual GPU register values
-
-        // DMA
-        for (int i = 0; i < 8; ++i) {
-            // Mock DMA state for now
-            state.dma[i] = {0, 0, false, 0, 0};
-        }
-
-        // Counters
-        for (int i = 0; i < 4; ++i) {
-            // Mock counter state for now
-            state.counter[i] = {0, 0, false};
-        }
+    if (!g_emulator || !g_emulator->m_mem) return state;
+    auto& mem = g_emulator->m_mem;
+    state.gpu.status = g_emulator->m_gpu ? g_emulator->m_gpu->readStatus() : 0;
+    for (uint32_t i = 0; i < 7; ++i) state.dma[i] = GetDMAState(i);
+    for (uint32_t i = 0; i < 4; ++i) {
+        const uint16_t base = static_cast<uint16_t>(0x1100 + i * 0x10);
+        state.counter[i].value = readHardwareWord(mem->m_hard, base);
+        state.counter[i].mode = readHardwareWord(mem->m_hard, base + 4);
+        state.counter[i].target = readHardwareWord(mem->m_hard, base + 8);
     }
     return state;
 }
@@ -639,32 +795,26 @@ bool MCPServer::WriteHardwareRegister(const std::string& register_name, uint32_t
 }
 
 MCPServer::HardwareState::DMAChannel MCPServer::GetDMAState(uint32_t channel) {
-    if (channel >= 7) {
-        return {0, 0, false, 0, 0};  // Invalid channel
+    if (!g_emulator || !g_emulator->m_mem) return {};
+    auto& mem = g_emulator->m_mem;
+    switch (channel) {
+        case 0:
+            return dmaChannel<0>(mem);
+        case 1:
+            return dmaChannel<1>(mem);
+        case 2:
+            return dmaChannel<2>(mem);
+        case 3:
+            return dmaChannel<3>(mem);
+        case 4:
+            return dmaChannel<4>(mem);
+        case 5:
+            return dmaChannel<5>(mem);
+        case 6:
+            return dmaChannel<6>(mem);
+        default:
+            return {};
     }
-
-    // Each DMA channel has 3 registers at offset 0x10 from each other
-    // Base is 0x1080, each channel offset by 0x10
-    uint16_t base_offset = 0x1080 + (channel * 0x10);
-
-    // Read MADR (Memory Address Register) at offset +0
-    uint32_t* madr_ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[base_offset]);
-    uint32_t madr = *madr_ptr;
-
-    // Read BCR (Block Control Register) at offset +4
-    uint32_t* bcr_ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[base_offset + 4]);
-    uint32_t bcr = *bcr_ptr;
-
-    // Read CHCR (Channel Control Register) at offset +8
-    uint32_t* chcr_ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[base_offset + 8]);
-    uint32_t chcr = *chcr_ptr;
-
-    // Extract values from registers
-    bool enabled = (chcr & 0x01000000) != 0;  // Bit 24 indicates if DMA is active
-    uint32_t block_size = bcr >> 16;
-    uint32_t block_count = bcr & 0xFFFF;
-
-    return {madr, bcr, enabled, block_size, block_count};
 }
 
 std::vector<std::string> MCPServer::GetCallChain(uint32_t max_depth) {
@@ -833,68 +983,106 @@ std::string MCPServer::GetEmulatorState() {
 }
 
 std::string MCPServer::HandleMCPRequest(const std::string& request_str) {
+    // This runs on the emulator's libuv thread. Tool implementations must not
+    // block or touch state from another thread.
     nlohmann::json request_json;
-    nlohmann::json response_json;
-
     try {
         request_json = nlohmann::json::parse(request_str);
-        std::string method = request_json.at("method").get<std::string>();
-        nlohmann::json params = request_json.value("params", nlohmann::json::object());
-
-        response_json["jsonrpc"] = "2.0";
-        if (request_json.contains("id")) {
-            response_json["id"] = request_json["id"];
-        } else {
-            response_json["id"] = nullptr;
-        }
-
-        if (method == "initialize") {
-            // Standard MCP initialize method
-            response_json["result"] = {
-                {"protocolVersion", "2024-11-05"},
-                {"capabilities", {{"tools", nlohmann::json::object()}}},
-                {"serverInfo",
-                 {{"name", "PCSX-Redux MCP Server"},
-                  {"version", "1.0.0"},
-                  {"notes",
-                   "This MCP server is experimental and under active development. Some tools may have limited "
-                   "functionality or return mock data. Use with caution for critical analysis tasks."}}}};
-        } else if (method == "tools/list") {
-            // Standard MCP tools/list method
-            nlohmann::json tools_array = nlohmann::json::array();
-            for (const auto& tool : ListTools()) {
-                tools_array.push_back(
-                    {{"name", tool.name},
-                     {"description", tool.description},
-                     {"inputSchema", {{"type", "object"}, {"properties", nlohmann::json::object()}}},
-                     {"notes",
-                      "This MCP server is experimental and under active development. Some tools may return mock data "
-                      "or have limited functionality. Use with caution for critical analysis tasks."}});
-            }
-            response_json["result"] = {{"tools", tools_array}};
-        } else if (method == "tools/call") {
-            // Standard MCP tools/call method
-            std::string tool_name = params.at("name").get<std::string>();
-            nlohmann::json args_json = params.value("arguments", nlohmann::json::object());
-            ToolResult result = ExecuteTool(tool_name, args_json.dump());
-            if (result.success) {
-                response_json["result"] = {
-                    {"content", nlohmann::json::array({{{"type", "text"}, {"text", result.content}}})}};
-            } else {
-                response_json["error"] = {{"code", -32000}, {"message", result.error}};
-            }
-        } else {
-            response_json["error"] = {{"code", -32601}, {"message", "Method not found"}};
-        }
     } catch (const nlohmann::json::exception& e) {
-        response_json["jsonrpc"] = "2.0";
-        response_json["error"] = {{"code", -32700}, {"message", "Parse error: " + std::string(e.what())}};
-    } catch (const std::exception& e) {
-        response_json["jsonrpc"] = "2.0";
-        response_json["error"] = {{"code", -32000}, {"message", "Server error: " + std::string(e.what())}};
+        nlohmann::json error = {{"jsonrpc", "2.0"},
+                                {"id", nullptr},
+                                {"error", {{"code", -32700}, {"message", "Parse error: " + std::string(e.what())}}}};
+        return error.dump();
     }
 
-    return response_json.dump();
+    if (!request_json.is_object() || !request_json.contains("method") || !request_json["method"].is_string()) {
+        nlohmann::json error = {{"jsonrpc", "2.0"},
+                                {"id", nullptr},
+                                {"error", {{"code", -32600}, {"message", "Invalid Request"}}}};
+        return error.dump();
+    }
+
+    const std::string method = request_json["method"].get<std::string>();
+    const nlohmann::json params = request_json.value("params", nlohmann::json::object());
+    const bool isNotification = !request_json.contains("id");
+
+    // JSON-RPC notifications never receive a response.
+    if (isNotification && method.rfind("notifications/", 0) == 0) {
+        return "";
+    }
+
+    nlohmann::json response;
+    response["jsonrpc"] = "2.0";
+    if (!isNotification) response["id"] = request_json["id"];
+
+    try {
+        if (method == "initialize") {
+            static const std::set<std::string> supported = {"2024-11-05", "2025-03-26", "2025-06-18"};
+            const std::string clientVersion = params.value("protocolVersion", "");
+            const std::string version = supported.count(clientVersion) ? clientVersion : "2025-06-18";
+            response["result"] = {
+                {"protocolVersion", version},
+                {"capabilities", {{"tools", {{"listChanged", false}}}}},
+                {"serverInfo", {{"name", "PCSX-Redux MCP Server"}, {"version", "1.0.0"}}},
+                {"instructions",
+                 "Real-time access to the PCSX-Redux emulator: CPU, memory, breakpoints, execution control, GPU "
+                 "status and memory dumps for reverse engineering."}};
+        } else if (method == "ping") {
+            response["result"] = nlohmann::json::object();
+        } else if (method == "tools/list") {
+            nlohmann::json tools_array = nlohmann::json::array();
+            for (const auto& tool : ListTools()) {
+                nlohmann::json inputSchema = nlohmann::json::parse(tool.schema.empty() ? "{}" : tool.schema);
+                tools_array.push_back(
+                    {{"name", tool.name}, {"description", tool.description}, {"inputSchema", inputSchema}});
+            }
+            response["result"] = {{"tools", tools_array}};
+        } else if (method == "tools/call") {
+            const std::string tool_name = params.at("name").get<std::string>();
+            const nlohmann::json args_json = params.value("arguments", nlohmann::json::object());
+
+            bool readOnly = false;
+            if (g_emulator) {
+                const auto& settings = g_emulator->settings.get<Emulator::SettingDebugSettings>();
+                readOnly = settings.get<Emulator::DebugSettings::MCPServerReadOnly>();
+            }
+            if (readOnly && IsMutatingTool(tool_name)) {
+                response["result"] = {
+                    {"content",
+                     nlohmann::json::array({{{"type", "text"},
+                                             {"text", "Tool '" + tool_name + "' is disabled in read-only mode."}}})},
+                    {"isError", true}};
+            } else {
+                const ToolResult result = ExecuteTool(tool_name, args_json.dump());
+                if (result.success) {
+                    response["result"] = {
+                        {"content", nlohmann::json::array({{{"type", "text"}, {"text", result.content}}})}};
+                } else {
+                    response["result"] = {
+                        {"content",
+                         nlohmann::json::array({{{"type", "text"}, {"text", result.error}}})},
+                        {"isError", true}};
+                }
+            }
+        } else {
+            response["error"] = {{"code", -32601}, {"message", "Method not found"}};
+        }
+    } catch (const nlohmann::json::exception& e) {
+        response["error"] = {{"code", -32602}, {"message", "Invalid params: " + std::string(e.what())}};
+    } catch (const std::exception& e) {
+        response["error"] = {{"code", -32603}, {"message", "Internal error: " + std::string(e.what())}};
+    }
+
+    if (isNotification) return "";
+    return response.dump();
+}
+
+bool MCPServer::IsMutatingTool(const std::string& tool_name) {
+    static const std::set<std::string> mutating = {
+        "write_memory", "write_hardware_register", "save_state", "load_state", "pad_set", "pad_clear",
+        "pause",        "resume",                    "step_in",    "step_over", "step_out", "run_to_address",
+        "set_breakpoint", "clear_breakpoint",        "vram_dump",  "screenshot", "dump_memory", "snapshot_ram"};
+    return mutating.count(tool_name) != 0;
 }
 
 MCPServer::ToolResult MCPServer::ToolGetCPUState() { return {true, SerializeState(GetCPUState()), ""}; }
@@ -903,40 +1091,28 @@ MCPServer::ToolResult MCPServer::ToolGetMemoryMap() { return {true, SerializeSta
 
 MCPServer::ToolResult MCPServer::ToolGetMemoryRange(uint32_t address, uint32_t length) {
     std::vector<uint8_t> data;
-    if (g_emulator && g_emulator->m_mem) {
-        data.reserve(length);
-        for (uint32_t i = 0; i < length; ++i) {
-            data.push_back(g_emulator->m_mem->read8(address + i));
-        }
-    } else {
-        return {false, "", "Emulator not initialized"};
+    if (!ReadGuestMemory(address, length, data)) {
+        return {false, "", "Address range is not readable guest memory (RAM, scratchpad, BIOS or EXP1)"};
     }
 
     nlohmann::json result_json;
     result_json["address"] = address;
     result_json["length"] = length;
-    result_json["data"] = data;  // Will be base64 encoded by nlohmann::json
+    result_json["data"] = data;
     return {true, result_json.dump(), ""};
 }
 
 MCPServer::ToolResult MCPServer::ToolFindString(const std::string& pattern, const std::string& region) {
-    if (!g_emulator || !g_emulator->m_mem) {
-        return {false, "", "Emulator not initialized"};
+    uint32_t start_addr = 0;
+    uint32_t end_addr = 0x00200000;
+    if (region == "bios") {
+        start_addr = 0x1FC00000;
+        end_addr = 0x1FC80000;
     }
 
-    // Determine search region
-    uint32_t start_addr = 0;
-    uint32_t end_addr = 0;
-
-    if (region == "ram") {
-        start_addr = 0x00000000;
-        end_addr = 0x00200000;  // 2MB RAM
-    } else if (region == "bios") {
-        start_addr = 0x1FC00000;
-        end_addr = 0x1FC80000;  // 512KB BIOS
-    } else {
-        start_addr = 0x00000000;
-        end_addr = 0x00200000;  // Default to RAM
+    std::vector<uint8_t> data;
+    if (!ReadGuestMemory(start_addr, end_addr - start_addr, data)) {
+        return {false, "", "Unable to read the requested memory region"};
     }
 
     nlohmann::json result_json;
@@ -944,128 +1120,78 @@ MCPServer::ToolResult MCPServer::ToolFindString(const std::string& pattern, cons
     result_json["region"] = region;
     result_json["results"] = nlohmann::json::array();
 
-    // Search for the pattern in memory
-    size_t pattern_len = pattern.length();
-    if (pattern_len == 0) {
-        return {true, result_json.dump(), ""};
-    }
+    if (pattern.empty()) return {true, result_json.dump(), ""};
 
-    for (uint32_t addr = start_addr; addr <= end_addr - pattern_len; ++addr) {
-        bool match = true;
-        for (size_t i = 0; i < pattern_len; ++i) {
-            uint8_t byte = g_emulator->m_mem->read8(addr + i);
-            if (byte != static_cast<uint8_t>(pattern[i])) {
-                match = false;
+    for (size_t i = 0; i + pattern.size() <= data.size(); ++i) {
+        if (std::memcmp(data.data() + i, pattern.data(), pattern.size()) != 0) continue;
+        std::string context;
+        for (size_t j = 0; j < pattern.size() + 16 && i + j < data.size(); ++j) {
+            const uint8_t byte = data[i + j];
+            if (byte >= 32 && byte < 127) {
+                context += static_cast<char>(byte);
+            } else if (byte == 0) {
                 break;
+            } else {
+                context += '.';
             }
         }
-
-        if (match) {
-            // Read a bit more context
-            std::string context;
-            for (size_t i = 0; i < pattern_len + 16 && (addr + i) < end_addr; ++i) {
-                uint8_t byte = g_emulator->m_mem->read8(addr + i);
-                if (byte >= 32 && byte < 127) {
-                    context += static_cast<char>(byte);
-                } else if (byte == 0) {
-                    break;  // Null terminator
-                } else {
-                    context += '.';
-                }
-            }
-
-            result_json["results"].push_back({{"address", addr}, {"content", context}});
-        }
+        result_json["results"].push_back({{"address", start_addr + static_cast<uint32_t>(i)}, {"content", context}});
     }
 
     return {true, result_json.dump(), ""};
 }
 
 MCPServer::ToolResult MCPServer::ToolSearchBytes(const std::string& pattern, const std::string& region) {
-    if (!g_emulator || !g_emulator->m_mem) {
-        return {false, "", "Emulator not initialized"};
-    }
-
-    // Determine search region
     uint32_t start_addr = 0;
-    uint32_t end_addr = 0;
-
-    if (region == "ram") {
-        start_addr = 0x00000000;
-        end_addr = 0x00200000;  // 2MB RAM
-    } else if (region == "bios") {
+    uint32_t end_addr = 0x00200000;
+    if (region == "bios") {
         start_addr = 0x1FC00000;
-        end_addr = 0x1FC80000;  // 512KB BIOS
-    } else {
-        start_addr = 0x00000000;
-        end_addr = 0x00200000;  // Default to RAM
+        end_addr = 0x1FC80000;
     }
 
-    // Parse hex pattern (e.g., "0A 1B 2C" or "0a1b2c")
-    std::vector<uint8_t> search_bytes;
-    std::string clean_pattern;
+    std::vector<uint8_t> needle;
+    std::string clean;
     for (char c : pattern) {
-        if (c != ' ' && c != '\t') {
-            clean_pattern += c;
-        }
+        if (c != ' ' && c != '	') clean += c;
     }
-
-    // Convert hex string to bytes
-    for (size_t i = 0; i < clean_pattern.length(); i += 2) {
-        if (i + 1 < clean_pattern.length()) {
-            std::string byte_str = clean_pattern.substr(i, 2);
-            try {
-                uint8_t byte = static_cast<uint8_t>(std::stoi(byte_str, nullptr, 16));
-                search_bytes.push_back(byte);
-            } catch (...) {
-                return {false, "", "Invalid hex pattern"};
-            }
-        }
+    if (clean.size() % 2 != 0) return {false, "", "Hex pattern must contain an even number of digits"};
+    for (size_t i = 0; i < clean.size(); i += 2) {
+        uint8_t byte = 0;
+        const auto [ptr, ec] = std::from_chars(clean.data() + i, clean.data() + i + 2, byte, 16);
+        if (ec != std::errc() || ptr != clean.data() + i + 2) return {false, "", "Invalid hex pattern"};
+        needle.push_back(byte);
     }
+    if (needle.empty()) return {false, "", "Empty search pattern"};
 
-    if (search_bytes.empty()) {
-        return {false, "", "Empty search pattern"};
+    std::vector<uint8_t> data;
+    if (!ReadGuestMemory(start_addr, end_addr - start_addr, data)) {
+        return {false, "", "Unable to read the requested memory region"};
     }
 
     nlohmann::json result_json;
     result_json["pattern"] = pattern;
     result_json["region"] = region;
     result_json["results"] = nlohmann::json::array();
-
-    // Search for byte pattern in memory
-    size_t pattern_len = search_bytes.size();
-    for (uint32_t addr = start_addr; addr <= end_addr - pattern_len; ++addr) {
-        bool match = true;
-        for (size_t i = 0; i < pattern_len; ++i) {
-            uint8_t byte = g_emulator->m_mem->read8(addr + i);
-            if (byte != search_bytes[i]) {
-                match = false;
-                break;
-            }
-        }
-
-        if (match) {
-            result_json["results"].push_back({{"address", addr}, {"length", pattern_len}});
+    for (size_t i = 0; i + needle.size() <= data.size(); ++i) {
+        if (std::memcmp(data.data() + i, needle.data(), needle.size()) == 0) {
+            result_json["results"].push_back(
+                {{"address", start_addr + static_cast<uint32_t>(i)}, {"length", needle.size()}});
         }
     }
-
     return {true, result_json.dump(), ""};
 }
 
 MCPServer::ToolResult MCPServer::ToolHexdump(uint32_t address, uint32_t length) {
-    if (!g_emulator || !g_emulator->m_mem) {
-        return {false, "", "Emulator not initialized"};
+    std::vector<uint8_t> data;
+    if (!ReadGuestMemory(address, length, data)) {
+        return {false, "", "Address range is not readable guest memory (RAM, scratchpad, BIOS or EXP1)"};
     }
 
     std::stringstream hex_str;
     hex_str << std::hex << std::setfill('0');
-
     for (uint32_t i = 0; i < length; ++i) {
-        if (i > 0 && i % 16 == 0) {
-            hex_str << "\n";
-        }
-        uint8_t byte = g_emulator->m_mem->read8(address + i);
-        hex_str << std::setw(2) << static_cast<int>(byte) << " ";
+        if (i > 0 && i % 16 == 0) hex_str << "\n";
+        hex_str << std::setw(2) << static_cast<int>(data[i]) << " ";
     }
 
     nlohmann::json result_json;
@@ -1076,46 +1202,6 @@ MCPServer::ToolResult MCPServer::ToolHexdump(uint32_t address, uint32_t length) 
 }
 
 MCPServer::ToolResult MCPServer::ToolGetGPUState() { return {true, SerializeState(GetGPUState()), ""}; }
-
-MCPServer::ToolResult MCPServer::ToolListGPUCommands(uint32_t limit) {
-    if (!g_emulator || !g_emulator->m_gpuLogger) {
-        return {false, "", "Emulator or GPU Logger not initialized"};
-    }
-
-    nlohmann::json result_json;
-    result_json["limit"] = limit;
-    result_json["command_count"] = 0;
-    result_json["commands"] = nlohmann::json::array();
-    result_json["logger_enabled"] = false;
-
-    // Check if GPU logger is enabled
-    // Note: We can't directly check m_enabled as it's private, but we can try to enable it
-    // For now, we'll return what's available
-
-    // The GPULogger stores commands in m_list which is private
-    // Since we can't access it directly, we'll return a message about the limitation
-    // and suggest enabling the GPU logger from the GUI
-
-    result_json["note"] = "GPU command logging requires GPU Logger to be enabled from the GUI (Debug -> GPU Logger)";
-    result_json["gpu_logger_available"] = true;
-    result_json["alternative"] = "Use get_gpu_state to read the GPU status register directly";
-
-    // Add GPU status info as a command entry
-    if (g_emulator->m_gpu) {
-        uint32_t status = g_emulator->m_gpu->readStatus();
-        nlohmann::json cmd;
-        cmd["type"] = "GPU_STATUS";
-        cmd["value"] = status;
-        std::stringstream hex_str;
-        hex_str << "0x" << std::hex << std::setfill('0') << std::setw(8) << status;
-        cmd["hex"] = hex_str.str();
-        cmd["description"] = "Current GPU status register";
-        result_json["commands"].push_back(cmd);
-        result_json["command_count"] = 1;
-    }
-
-    return {true, result_json.dump(), ""};
-}
 
 MCPServer::ToolResult MCPServer::ToolListHardwareRegisters() {
     nlohmann::json result_json = ListHardwareRegisters();
@@ -1269,12 +1355,7 @@ std::string MCPServer::SerializeState(const MemoryState& state) {
 
 std::string MCPServer::SerializeState(const GPUState& state) {
     nlohmann::json j;
-    j["gpu_read"] = state.gpu_read;
-    j["gpu_reg"] = state.gpu_reg;
-    j["gp1"] = state.gp1;
     j["status"] = state.status;
-    j["dirty_flag"] = state.dirty_flag;
-    j["display_mode"]["mode"] = state.display_mode.mode;
     j["display_mode"]["width"] = state.display_mode.width;
     j["display_mode"]["height"] = state.display_mode.height;
     j["display_mode"]["refresh_rate"] = state.display_mode.refresh_rate;
@@ -1283,9 +1364,6 @@ std::string MCPServer::SerializeState(const GPUState& state) {
 
 std::string MCPServer::SerializeState(const HardwareState& state) {
     nlohmann::json j;
-    j["gpu"]["gpu_read"] = state.gpu.gpu_read;
-    j["gpu"]["gpu_reg"] = state.gpu.gpu_reg;
-    j["gpu"]["gp1"] = state.gpu.gp1;
     j["gpu"]["status"] = state.gpu.status;
     for (int i = 0; i < 8; ++i) {
         j["dma"][i]["address"] = state.dma[i].address;
@@ -1297,7 +1375,7 @@ std::string MCPServer::SerializeState(const HardwareState& state) {
     for (int i = 0; i < 4; ++i) {
         j["counter"][i]["value"] = state.counter[i].value;
         j["counter"][i]["mode"] = state.counter[i].mode;
-        j["counter"][i]["enabled"] = state.counter[i].enabled;
+        j["counter"][i]["target"] = state.counter[i].target;
     }
     return j.dump();
 }
@@ -1446,11 +1524,11 @@ MCPServer::ToolResult MCPServer::ToolHowToUseMCP() {
 
     guide["title"] = "MCP Server Usage Guide for AI Assistants";
     guide["version"] = "1.0";
-    guide["total_tools"] = 29;
+    guide["total_tools"] = 35;
 
     // Overview
     guide["overview"] = {
-        {"description", "The PCSX-Redux MCP server provides 29 tools for analyzing PlayStation 1 games in real-time"},
+        {"description", "The PCSX-Redux MCP server provides 35 tools for analyzing PlayStation 1 games in real-time"},
         {"capabilities",
          nlohmann::json::array({"Execution control (pause, resume, step through code)", "Real MIPS R3000A disassembly",
                                 "Memory inspection and search", "GPU and DMA monitoring", "Hardware register access",
@@ -1508,8 +1586,7 @@ MCPServer::ToolResult MCPServer::ToolHowToUseMCP() {
         {"monitoring_gpu",
          {{"description", "Analyze rendering and graphics"},
           {"steps", nlohmann::json::array({"1. get_gpu_state() - Check GPU status register",
-                                           "2. list_gpu_commands(20) - See recent GPU commands",
-                                           "3. get_dma_state(2) - Check GPU DMA channel (channel 2)",
+                                           "2. get_dma_state(2) - Check GPU DMA channel (channel 2)",
                                            "4. Correlate with CPU code using breakpoints"})}}},
         {"extracting_overlays",
          {{"description", "Capture dynamically loaded code for Ghidra analysis"},
@@ -1543,7 +1620,7 @@ MCPServer::ToolResult MCPServer::ToolHowToUseMCP() {
         {"hardware",
          {{"tools",
            nlohmann::json::array({"list_hardware_registers", "read_hardware_register", "write_hardware_register",
-                                  "get_dma_state", "get_gpu_state", "list_gpu_commands"})},
+                                  "get_dma_state", "get_gpu_state"})},
           {"best_practice",
            "Monitor I_STAT for interrupts. Check DMA channels 2 (GPU) and 6 (OT). GPU status shows display mode and "
            "busy state."}}},
@@ -1690,15 +1767,6 @@ static std::string getTimestampString() {
     return ss.str();
 }
 
-// Helper: resolve a user-provided directory string. If relative, base it on the cwd.
-static std::filesystem::path resolveOutputDirectory(const std::string& output_dir) {
-    std::filesystem::path p(output_dir);
-    if (p.is_relative()) {
-        p = std::filesystem::current_path() / p;
-    }
-    return p;
-}
-
 MCPServer::ToolResult MCPServer::ToolDumpMemory(uint32_t address, uint32_t length, const std::string& tag,
                                                 const std::string& output_dir) {
     if (!g_emulator || !g_emulator->m_mem) {
@@ -1709,11 +1777,20 @@ MCPServer::ToolResult MCPServer::ToolDumpMemory(uint32_t address, uint32_t lengt
         return {false, "", "Invalid dump length (must be > 0 and <= 8MB)"};
     }
 
+    std::vector<uint8_t> buffer;
+    if (!ReadGuestMemory(address, length, buffer)) {
+        return {false, "", "Address range is not readable guest memory (RAM, scratchpad, BIOS or EXP1)"};
+    }
+
     // Pause emulator to ensure a consistent snapshot
     g_system->pause();
 
     try {
-        std::filesystem::path outDir = resolveOutputDirectory(output_dir);
+        std::filesystem::path outDir;
+        std::string pathError;
+        if (!ResolveHostPath(output_dir, outDir, pathError)) {
+            return {false, "", pathError};
+        }
         std::filesystem::create_directories(outDir);
 
         std::string safeTag = sanitizeFilenameTag(tag);
@@ -1729,11 +1806,6 @@ MCPServer::ToolResult MCPServer::ToolDumpMemory(uint32_t address, uint32_t lengt
             return {false, "", "Failed to open binary file for writing: " + binPath.string()};
         }
 
-        std::vector<uint8_t> buffer;
-        buffer.reserve(length);
-        for (uint32_t i = 0; i < length; ++i) {
-            buffer.push_back(g_emulator->m_mem->read8(address + i));
-        }
         binFile.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
         binFile.close();
 
@@ -1794,7 +1866,9 @@ MCPServer::ToolResult MCPServer::ToolVRAMDump(const std::string& path) {
     g_system->pause();
 
     auto vram = g_emulator->m_gpu->getVRAM();
-    std::filesystem::path outPath(path);
+    std::filesystem::path outPath;
+    std::string pathError;
+    if (!ResolveHostPath(path, outPath, pathError)) return {false, "", pathError};
     if (outPath.has_parent_path()) {
         std::filesystem::create_directories(outPath.parent_path());
     }
@@ -1837,7 +1911,9 @@ MCPServer::ToolResult MCPServer::ToolScreenshot(const std::string& path) {
         }
     }
 
-    std::filesystem::path outPath(path);
+    std::filesystem::path outPath;
+    std::string pathError;
+    if (!ResolveHostPath(path, outPath, pathError)) return {false, "", pathError};
     if (outPath.has_parent_path()) {
         std::filesystem::create_directories(outPath.parent_path());
     }
@@ -1892,7 +1968,9 @@ MCPServer::ToolResult MCPServer::ToolSaveState(const std::string& path) {
     }
     std::string data = SaveStates::save();
 
-    std::filesystem::path outPath(path);
+    std::filesystem::path outPath;
+    std::string pathError;
+    if (!ResolveHostPath(path, outPath, pathError)) return {false, "", pathError};
     if (outPath.has_parent_path()) {
         std::filesystem::create_directories(outPath.parent_path());
     }
@@ -1913,9 +1991,12 @@ MCPServer::ToolResult MCPServer::ToolLoadState(const std::string& path) {
     if (!g_emulator) {
         return {false, "", "Emulator not initialized"};
     }
-    std::ifstream in(path, std::ios::binary);
+    std::filesystem::path inPath;
+    std::string pathError;
+    if (!ResolveHostPath(path, inPath, pathError)) return {false, "", pathError};
+    std::ifstream in(inPath, std::ios::binary);
     if (!in) {
-        return {false, "", "Cannot open " + path};
+        return {false, "", "Cannot open " + inPath.string()};
     }
     std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
     g_system->pause();

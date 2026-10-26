@@ -20,6 +20,7 @@
 #pragma once
 
 #include <atomic>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -27,10 +28,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "src/core/gpu.h"          // Path relative to pcsx-redux/
-#include "src/core/psxemulator.h"  // Path relative to pcsx-redux/
-#include "src/core/psxhw.h"        // Path relative to pcsx-redux/
-#include "src/core/psxmem.h"       // Path relative to pcsx-redux/
+#include "core/gpu.h"
+#include "core/psxemulator.h"
+#include "core/psxhw.h"
+#include "core/psxmem.h"
 
 namespace PCSX {
 
@@ -48,6 +49,7 @@ class MCPServer {
     struct Tool {
         std::string name;
         std::string description;
+        std::string schema;  // JSON Schema for the tool's arguments
     };
 
     /**
@@ -113,15 +115,10 @@ class MCPServer {
      * @brief GPU State
      */
     struct GPUState {
-        uint32_t gpu_read;
-        uint32_t gpu_reg;
-        uint32_t gp1;
         uint32_t status;
-        bool dirty_flag;
 
-        // Display mode
+        // Parsed from the status register.
         struct DisplayMode {
-            uint32_t mode;
             uint32_t width;
             uint32_t height;
             uint32_t refresh_rate;
@@ -135,9 +132,6 @@ class MCPServer {
     struct HardwareState {
         // GPU registers
         struct GPURegister {
-            uint32_t gpu_read;
-            uint32_t gpu_reg;
-            uint32_t gp1;
             uint32_t status;
         };
         GPURegister gpu;
@@ -156,7 +150,7 @@ class MCPServer {
         struct Counter {
             uint32_t value;
             uint32_t mode;
-            bool enabled;
+            uint32_t target;
         };
         Counter counter[4];
     };
@@ -264,6 +258,9 @@ class MCPServer {
     // MCP Protocol Handler
     static std::string HandleMCPRequest(const std::string& request);
 
+    // True when a tool mutates emulator or host state (used by MCPServerReadOnly).
+    static bool IsMutatingTool(const std::string& tool_name);
+
     // Internal state
     static Config config_;
 
@@ -280,6 +277,16 @@ class MCPServer {
     // Internal helper to register all tools
     static void RegisterToolsIfNeeded();
 
+    // Reads a guest memory region without side effects. Only RAM, scratchpad,
+    // BIOS and EXP1 are supported; hardware registers are rejected.
+    static bool ReadGuestMemory(uint32_t address, uint32_t length, std::vector<uint8_t>& out);
+
+    // Directory that dump_memory/snapshot_ram are allowed to write into.
+    static std::filesystem::path AllowedDumpRoot();
+    static bool IsPathWithin(const std::filesystem::path& root, const std::filesystem::path& target);
+    // Resolves a host path and rejects anything outside AllowedDumpRoot().
+    static bool ResolveHostPath(const std::string& path, std::filesystem::path& out, std::string& error);
+
     // Tool implementations (these are private helper functions for ExecuteTool)
     static ToolResult ToolGetCPUState();
     static ToolResult ToolGetMemoryMap();
@@ -288,7 +295,6 @@ class MCPServer {
     static ToolResult ToolSearchBytes(const std::string& pattern, const std::string& region);
     static ToolResult ToolHexdump(uint32_t address, uint32_t length);
     static ToolResult ToolGetGPUState();
-    static ToolResult ToolListGPUCommands(uint32_t limit);
     static ToolResult ToolListHardwareRegisters();
     static ToolResult ToolReadHardwareRegister(const std::string& register_name);
     static ToolResult ToolWriteHardwareRegister(const std::string& register_name, uint32_t value);
