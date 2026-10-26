@@ -186,6 +186,7 @@
     <ClCompile Include="..\..\src\core\system.cc" />
     <ClCompile Include="..\..\src\core\ui.cc" />
     <ClCompile Include="..\..\src\core\mcp-server.cc" />
+    <ClCompile Include="..\..\src\core\mcp-tools.cc" />
     <ClCompile Include="..\..\src\core\web-server.cc" />
     <ClCompile Include="..\..\src\mips-common\util\sjis-decode.cc" />
     <ClCompile Include="..\..\src\mips-common\util\sjis-fullwidth-ascii.cc" />
