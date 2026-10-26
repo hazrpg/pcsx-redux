@@ -303,8 +303,13 @@ class MCPServer {
     static ToolResult ToolClearBreakpoint(uint32_t address);
     static ToolResult ToolGetCallChain(uint32_t max_depth);
     static ToolResult ToolGetCallGraph(const std::string& function_name, uint32_t depth);
-    static ToolResult ToolGetEmulatorState();
-    static ToolResult ToolIsGameLoaded();
+    static ToolResult ToolDumpMemory(uint32_t address, uint32_t length, const std::string& tag, const std::string& output_dir);
+    static ToolResult ToolSnapshotRAM(const std::string& tag, const std::string& output_dir);
+    static ToolResult ToolVRAMDump(const std::string& path);
+    static ToolResult ToolScreenshot(const std::string& path);
+    static ToolResult ToolWriteMemory(uint32_t address, uint32_t value, uint32_t size);
+    static ToolResult ToolSaveState(const std::string& path);
+    static ToolResult ToolLoadState(const std::string& path);
 
     // Execution control tools
     static ToolResult ToolPause();
@@ -314,6 +319,8 @@ class MCPServer {
     static ToolResult ToolStepOut();
     static ToolResult ToolRunToAddress(uint32_t address);
     static ToolResult ToolGetExecutionState();
+    static ToolResult ToolGetEmulatorState();
+    static ToolResult ToolIsGameLoaded();
     static ToolResult ToolHowToUseMCP();
 
     // Utility functions

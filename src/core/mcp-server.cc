@@ -27,10 +27,18 @@
 #include <stdexcept>
 #include <iomanip>
 #include <sstream>
+#include <ctime>
+#include <chrono>
+#include <fstream>
+#include <filesystem>
+#include <cctype>
+#include <cstring>
+#include <iterator>
 
 #include "third_party/json.hpp"
 #include "core/cdrom.h"
 #include "cdrom/cdriso.h"
+#include "core/sstate.h"
 #include "core/debug.h"
 #include "core/gpulogger.h"
 #include "core/callstacks.h"
@@ -134,6 +142,15 @@ void MCPServer::RegisterToolsIfNeeded() {
     tools_["run_to_address"] = {"run_to_address", "Run emulator until specified address (address)"};
     tools_["get_execution_state"] = {"get_execution_state", "Get current execution state (running/paused)"};
     tools_["how_to_use_mcp"] = {"how_to_use_mcp", "Get AI-friendly guide on how to use MCP tools effectively"};
+    
+    // Dynamic extraction tools for reverse engineering
+    tools_["dump_memory"] = {"dump_memory", "Dump a memory region to a .bin file + .json manifest (address, length, tag, output_dir)"};
+    tools_["snapshot_ram"] = {"snapshot_ram", "Dump full 2MB WRAM to a .bin file + .json manifest (tag, output_dir)"};
+    tools_["vram_dump"] = {"vram_dump", "Write the raw 1024x512 16-bit VRAM to a file (path)"};
+    tools_["screenshot"] = {"screenshot", "Write the current framebuffer as a binary PPM to a file (path)"};
+    tools_["write_memory"] = {"write_memory", "Write 8, 16 or 32 bits to guest memory (address, value, size)"};
+    tools_["save_state"] = {"save_state", "Serialize the emulator state to a file (path)"};
+    tools_["load_state"] = {"load_state", "Load a serialized emulator state from a file (path)"};
 }
 
 std::vector<MCPServer::Tool> MCPServer::ListTools() {
@@ -223,6 +240,29 @@ MCPServer::ToolResult MCPServer::ExecuteTool(const std::string& tool_name, const
             return ToolGetExecutionState();
         } else if (tool_name == "how_to_use_mcp") {
             return ToolHowToUseMCP();
+        } else if (tool_name == "dump_memory") {
+            uint32_t address = getRequiredAddress(args, "address", tool_name);
+            uint32_t length = getRequiredNumber(args, "length", tool_name);
+            std::string tag = getRequiredString(args, "tag", tool_name);
+            std::string output_dir = getRequiredString(args, "output_dir", tool_name);
+            return ToolDumpMemory(address, length, tag, output_dir);
+        } else if (tool_name == "snapshot_ram") {
+            std::string tag = getRequiredString(args, "tag", tool_name);
+            std::string output_dir = getRequiredString(args, "output_dir", tool_name);
+            return ToolSnapshotRAM(tag, output_dir);
+        } else if (tool_name == "vram_dump") {
+            return ToolVRAMDump(getRequiredString(args, "path", tool_name));
+        } else if (tool_name == "screenshot") {
+            return ToolScreenshot(getRequiredString(args, "path", tool_name));
+        } else if (tool_name == "write_memory") {
+            uint32_t address = getRequiredAddress(args, "address", tool_name);
+            uint32_t value = getRequiredNumber(args, "value", tool_name);
+            uint32_t size = args.value("size", 32);
+            return ToolWriteMemory(address, value, size);
+        } else if (tool_name == "save_state") {
+            return ToolSaveState(getRequiredString(args, "path", tool_name));
+        } else if (tool_name == "load_state") {
+            return ToolLoadState(getRequiredString(args, "path", tool_name));
         } else {
             return {false, "", "Unknown tool: " + tool_name};
         }
@@ -1454,11 +1494,11 @@ MCPServer::ToolResult MCPServer::ToolHowToUseMCP() {
     
     guide["title"] = "MCP Server Usage Guide for AI Assistants";
     guide["version"] = "1.0";
-    guide["total_tools"] = 27;
+    guide["total_tools"] = 29;
     
     // Overview
     guide["overview"] = {
-        {"description", "The PCSX-Redux MCP server provides 27 tools for analyzing PlayStation 1 games in real-time"},
+        {"description", "The PCSX-Redux MCP server provides 29 tools for analyzing PlayStation 1 games in real-time"},
         {"capabilities", nlohmann::json::array({
             "Execution control (pause, resume, step through code)",
             "Real MIPS R3000A disassembly",
@@ -1466,7 +1506,8 @@ MCPServer::ToolResult MCPServer::ToolHowToUseMCP() {
             "GPU and DMA monitoring",
             "Hardware register access",
             "Breakpoint management",
-            "Call chain and graph tracing"
+            "Call chain and graph tracing",
+            "Dynamic memory extraction for Ghidra overlay import"
         })},
         {"addressing", "All addresses accept hex strings (\"0x80010000\") or decimal numbers (2147549184)"}
     };
@@ -1540,6 +1581,16 @@ MCPServer::ToolResult MCPServer::ToolHowToUseMCP() {
                 "3. get_dma_state(2) - Check GPU DMA channel (channel 2)",
                 "4. Correlate with CPU code using breakpoints"
             })}
+        }},
+        {"extracting_overlays", {
+            {"description", "Capture dynamically loaded code for Ghidra analysis"},
+            {"steps", nlohmann::json::array({
+                "1. pause() - Halt at the moment the overlay is loaded",
+                "2. get_cpu_state() - Verify PC is in RAM range (0x80000000-0x801FFFFF)",
+                "3. dump_memory(address, length, tag, output_dir) - Capture the region",
+                "4. Import the resulting .bin + .json into Ghidra with ReduxOverlayImporter",
+                "5. snapshot_ram(tag, output_dir) - Alternatively dump full 2MB for diffing"
+            })}
         }}
     };
     
@@ -1564,6 +1615,10 @@ MCPServer::ToolResult MCPServer::ToolHowToUseMCP() {
         {"state", {
             {"tools", nlohmann::json::array({"get_emulator_state", "is_game_loaded"})},
             {"best_practice", "Use get_emulator_state() for comprehensive snapshot. Check is_game_loaded() before starting analysis."}
+        }},
+        {"dynamic_extraction", {
+            {"tools", nlohmann::json::array({"dump_memory", "snapshot_ram"})},
+            {"best_practice", "Pause before dumping to get a consistent snapshot. Use descriptive tags (e.g. 'bg2_title_code'). Provide output_dir as the absolute path to your Ghidra project's extracted_overlays folder."}
         }}
     };
     
@@ -1602,7 +1657,8 @@ MCPServer::ToolResult MCPServer::ToolHowToUseMCP() {
         {"tip7", "DMA channel 2 is GPU, channel 4 is SPU (audio), channel 6 is OT (ordering table)."},
         {"tip8", "If PC is in BIOS range (0xBFC00000), game hasn't loaded yet or crashed."},
         {"tip9", "Combine step_in() with get_cpu_state() to trace instruction-by-instruction."},
-        {"tip10", "Use get_emulator_state() to get everything at once - CPU, GPU, DMA, memory map, breakpoints."}
+        {"tip10", "Use get_emulator_state() to get everything at once - CPU, GPU, DMA, memory map, breakpoints."},
+        {"tip11", "dump_memory() writes a .bin + .json pair. Point output_dir at your Ghidra project's extracted_overlays/ folder for easy importing."}
     };
     
     // Error Handling
@@ -1629,6 +1685,7 @@ MCPServer::ToolResult MCPServer::ToolHowToUseMCP() {
         {"reverse_engineering", "Use set_breakpoint() + get_call_chain() to map function relationships. Build control flow graph manually."},
         {"performance_profiling", "Use timers (TIMER0-2 registers) to measure code execution time. Check DMA transfer counts."},
         {"save_state_analysis", "Pause at interesting moments, dump memory with hexdump(), compare across game states."},
+        {"overlay_extraction", "Use dump_memory() or snapshot_ram() to pull dynamically loaded code out of RAM. Import into Ghidra with ReduxOverlayImporter."},
         {"cheat_finding", "Search for numeric values with search_bytes(), modify game state, trace what code reads them."}
     };
     
@@ -1661,12 +1718,283 @@ MCPServer::ToolResult MCPServer::ToolHowToUseMCP() {
         "{\"tool\": \"hexdump\", \"arguments\": {\"address\": \"0x80050000\", \"length\": 256}}",
         "",
         "// 9. Search for game strings",
-        "{\"tool\": \"find_string\", \"arguments\": {\"pattern\": \"PLAYER\", \"region\": \"ram\"}}"
+        "{\"tool\": \"find_string\", \"arguments\": {\"pattern\": \"PLAYER\", \"region\": \"ram\"}}",
+        "",
+        "// 10. Dump dynamically loaded code for Ghidra",
+        "{\"tool\": \"dump_memory\", \"arguments\": {\"address\": \"0x80010000\", \"length\": 65536, \"tag\": \"bg2_title_code\", \"output_dir\": \"/path/to/ghidra_project/extracted_overlays\"}}",
+        "",
+        "// 11. Or snapshot the entire 2MB RAM for diffing",
+        "{\"tool\": \"snapshot_ram\", \"arguments\": {\"tag\": \"bg2_ram_full\", \"output_dir\": \"/path/to/ghidra_project/extracted_overlays\"}}"
     });
     
     guide["remember"] = "You have full control over PS1 emulation. Pause, inspect, step, search, and analyze. Build understanding incrementally. Use breakpoints to mark discoveries.";
     
     return {true, guide.dump(2), ""};  // Pretty print with 2-space indent
+}
+
+// Helper: sanitize a tag or filename fragment so it is safe for filesystem use
+static std::string sanitizeFilenameTag(const std::string& tag) {
+    std::string result;
+    result.reserve(tag.size());
+    for (char c : tag) {
+        if (std::isalnum(static_cast<unsigned char>(c)) || c == '-' || c == '_' || c == '.') {
+            result += c;
+        } else {
+            result += '_';
+        }
+    }
+    if (result.empty()) result = "dump";
+    return result;
+}
+
+// Helper: generate ISO 8601-ish timestamp for filenames
+static std::string getTimestampString() {
+    auto now = std::chrono::system_clock::now();
+    auto time_t_now = std::chrono::system_clock::to_time_t(now);
+    auto tm = *std::localtime(&time_t_now);
+    std::stringstream ss;
+    ss << std::put_time(&tm, "%Y%m%d_%H%M%S");
+    return ss.str();
+}
+
+// Helper: resolve a user-provided directory string. If relative, base it on the cwd.
+static std::filesystem::path resolveOutputDirectory(const std::string& output_dir) {
+    std::filesystem::path p(output_dir);
+    if (p.is_relative()) {
+        p = std::filesystem::current_path() / p;
+    }
+    return p;
+}
+
+MCPServer::ToolResult MCPServer::ToolDumpMemory(uint32_t address, uint32_t length, const std::string& tag, const std::string& output_dir) {
+    if (!g_emulator || !g_emulator->m_mem) {
+        return {false, "", "Emulator not initialized"};
+    }
+
+    if (length == 0 || length > 0x00800000) {
+        return {false, "", "Invalid dump length (must be > 0 and <= 8MB)"};
+    }
+
+    // Pause emulator to ensure a consistent snapshot
+    g_system->pause();
+
+    try {
+        std::filesystem::path outDir = resolveOutputDirectory(output_dir);
+        std::filesystem::create_directories(outDir);
+
+        std::string safeTag = sanitizeFilenameTag(tag);
+        std::string ts = getTimestampString();
+
+        std::string baseName = safeTag + "_" + ts;
+        std::filesystem::path binPath = outDir / (baseName + ".bin");
+        std::filesystem::path jsonPath = outDir / (baseName + ".json");
+
+        // Read memory and write binary file
+        std::ofstream binFile(binPath.string(), std::ios::binary);
+        if (!binFile) {
+            return {false, "", "Failed to open binary file for writing: " + binPath.string()};
+        }
+
+        std::vector<uint8_t> buffer;
+        buffer.reserve(length);
+        for (uint32_t i = 0; i < length; ++i) {
+            buffer.push_back(g_emulator->m_mem->read8(address + i));
+        }
+        binFile.write(reinterpret_cast<const char*>(buffer.data()), static_cast<std::streamsize>(buffer.size()));
+        binFile.close();
+
+        uint32_t pc = g_emulator->m_cpu ? g_emulator->m_cpu->m_regs.pc : 0;
+
+        // Build manifest
+        nlohmann::json manifest;
+        std::stringstream addrSS;
+        addrSS << "0x" << std::hex << std::setfill('0') << std::setw(8) << address;
+        manifest["base_address"] = addrSS.str();
+        manifest["size"] = length;
+        manifest["tag"] = tag;
+       manifest["dumped_at_pc"] = pc;
+        manifest["timestamp"] = ts;
+        manifest["filename"] = baseName + ".bin";
+        manifest["manifest_filename"] = baseName + ".json";
+        manifest["note"] = "Import this .bin into Ghidra as an overlay block at the base_address.";
+
+        std::ofstream jsonFile(jsonPath.string());
+        if (!jsonFile) {
+            return {false, "", "Failed to open manifest file for writing: " + jsonPath.string()};
+        }
+        jsonFile << manifest.dump(2);
+        jsonFile.close();
+
+        nlohmann::json result;
+        result["status"] = "success";
+        result["bin_path"] = binPath.string();
+        result["json_path"] = jsonPath.string();
+        result["base_address"] = addrSS.str();
+        result["size"] = length;
+        result["tag"] = tag;
+
+        return {true, result.dump(2), ""};
+    } catch (const std::filesystem::filesystem_error& e) {
+        return {false, "", std::string("Filesystem error: ") + e.what()};
+    } catch (const std::exception& e) {
+        return {false, "", std::string("Error during dump: ") + e.what()};
+    }
+}
+
+MCPServer::ToolResult MCPServer::ToolSnapshotRAM(const std::string& tag, const std::string& output_dir) {
+    if (!g_emulator || !g_emulator->m_mem) {
+        return {false, "", "Emulator not initialized"};
+    }
+
+    // Snapshot the full 2MB main WRAM region (0x00000000 - 0x001FFFFF in KUSEG, same bytes mirrored in KSEG0)
+    // m_wram is 8MB but the active PSX RAM window is 2MB unless expansion is enabled. We'll dump the full m_wram
+    // size actually used by the emulator, but cap at 2MB for standard PSX behaviour.
+    uint32_t ramSize = 0x00200000;
+    return ToolDumpMemory(0x00000000, ramSize, tag, output_dir);
+}
+
+MCPServer::ToolResult MCPServer::ToolVRAMDump(const std::string& path) {
+    if (!g_emulator || !g_emulator->m_gpu) {
+        return {false, "", "Emulator not initialized"};
+    }
+    g_system->pause();
+
+    auto vram = g_emulator->m_gpu->getVRAM();
+    std::filesystem::path outPath(path);
+    if (outPath.has_parent_path()) {
+        std::filesystem::create_directories(outPath.parent_path());
+    }
+    std::ofstream out(outPath, std::ios::binary);
+    if (!out) {
+        return {false, "", "Cannot open " + outPath.string()};
+    }
+    out.write(reinterpret_cast<const char*>(vram.data()), vram.size());
+    out.close();
+
+    nlohmann::json result;
+    result["path"] = outPath.string();
+    result["bytes"] = vram.size();
+    result["width"] = 1024;
+    result["height"] = 512;
+    result["format"] = "bgr555le";
+    return {true, result.dump(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolScreenshot(const std::string& path) {
+    if (!g_emulator || !g_emulator->m_gpu) {
+        return {false, "", "Emulator not initialized"};
+    }
+    g_system->pause();
+
+    auto shot = g_emulator->m_gpu->takeScreenShot();
+    const uint8_t* src = reinterpret_cast<const uint8_t*>(shot.data.data());
+    const size_t pixels = static_cast<size_t>(shot.width) * shot.height;
+    std::vector<uint8_t> rgb(pixels * 3);
+
+    if (shot.bpp == GPU::ScreenShot::BPP_24) {
+        std::memcpy(rgb.data(), src, pixels * 3);
+    } else {
+        const uint16_t* p = reinterpret_cast<const uint16_t*>(src);
+        for (size_t i = 0; i < pixels; i++) {
+            uint16_t v = p[i];
+            rgb[i * 3 + 0] = static_cast<uint8_t>((v & 0x1F) << 3);
+            rgb[i * 3 + 1] = static_cast<uint8_t>(((v >> 5) & 0x1F) << 3);
+            rgb[i * 3 + 2] = static_cast<uint8_t>(((v >> 10) & 0x1F) << 3);
+        }
+    }
+
+    std::filesystem::path outPath(path);
+    if (outPath.has_parent_path()) {
+        std::filesystem::create_directories(outPath.parent_path());
+    }
+    std::ofstream out(outPath, std::ios::binary);
+    if (!out) {
+        return {false, "", "Cannot open " + outPath.string()};
+    }
+    out << "P6\n" << shot.width << " " << shot.height << "\n255\n";
+    out.write(reinterpret_cast<const char*>(rgb.data()), rgb.size());
+    out.close();
+
+    nlohmann::json result;
+    result["path"] = outPath.string();
+    result["width"] = shot.width;
+    result["height"] = shot.height;
+    result["bpp"] = (shot.bpp == GPU::ScreenShot::BPP_24) ? 24 : 16;
+    result["format"] = "ppm-p6";
+    return {true, result.dump(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolWriteMemory(uint32_t address, uint32_t value, uint32_t size) {
+    if (!g_emulator || !g_emulator->m_mem) {
+        return {false, "", "Emulator not initialized"};
+    }
+    switch (size) {
+        case 8:
+            g_emulator->m_mem->write8(address, value & 0xFF);
+            break;
+        case 16:
+            g_emulator->m_mem->write16(address, value & 0xFFFF);
+            break;
+        case 32:
+            g_emulator->m_mem->write32(address, value);
+            break;
+        default:
+            return {false, "", "size must be 8, 16 or 32"};
+    }
+
+    std::stringstream addrSS;
+    addrSS << "0x" << std::hex << std::setfill('0') << std::setw(8) << address;
+    nlohmann::json result;
+    result["address"] = addrSS.str();
+    result["value"] = value;
+    result["size"] = size;
+    result["message"] = "memory written";
+    return {true, result.dump(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolSaveState(const std::string& path) {
+    if (!g_emulator) {
+        return {false, "", "Emulator not initialized"};
+    }
+    std::string data = SaveStates::save();
+
+    std::filesystem::path outPath(path);
+    if (outPath.has_parent_path()) {
+        std::filesystem::create_directories(outPath.parent_path());
+    }
+    std::ofstream out(outPath, std::ios::binary);
+    if (!out) {
+        return {false, "", "Cannot open " + outPath.string()};
+    }
+    out.write(data.data(), data.size());
+    out.close();
+
+    nlohmann::json result;
+    result["path"] = outPath.string();
+    result["bytes"] = data.size();
+    return {true, result.dump(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolLoadState(const std::string& path) {
+    if (!g_emulator) {
+        return {false, "", "Emulator not initialized"};
+    }
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        return {false, "", "Cannot open " + path};
+    }
+    std::string data((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    g_system->pause();
+    bool ok = SaveStates::load(data);
+    if (!ok) {
+        return {false, "", "SaveStates::load rejected the file"};
+    }
+
+    nlohmann::json result;
+    result["path"] = path;
+    result["bytes"] = data.size();
+    result["message"] = "state loaded, emulator paused";
+    return {true, result.dump(), ""};
 }
 
 } // namespace PCSX
