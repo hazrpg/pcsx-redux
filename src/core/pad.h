@@ -48,6 +48,10 @@ class Pads {
 
     virtual void reset() = 0;
 
+    // Host-side button override used by automation. `buttons` is the raw
+    // active-low pad status; frames = 0 keeps it until cleared.
+    static void setButtonsOverride(bool active, uint16_t buttons, int frames = 0);
+
     virtual void setLua(PCSX::Lua L) = 0;
 
     virtual bool isPadConnected(int pad) = 0;

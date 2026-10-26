@@ -310,6 +310,8 @@ class MCPServer {
     static ToolResult ToolWriteMemory(uint32_t address, uint32_t value, uint32_t size);
     static ToolResult ToolSaveState(const std::string& path);
     static ToolResult ToolLoadState(const std::string& path);
+    static ToolResult ToolPadSet(uint32_t pressed, uint32_t frames);
+    static ToolResult ToolPadClear();
 
     // Execution control tools
     static ToolResult ToolPause();

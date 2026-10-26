@@ -28,6 +28,7 @@
 #include <array>
 #include <cmath>
 #include <magic_enum_all.hpp>
+#include <atomic>
 
 #include "core/psxemulator.h"
 #include "core/system.h"
@@ -36,6 +37,18 @@
 #include "imgui.h"
 #include "support/file.h"
 #include "support/imgui-helpers.h"
+
+namespace {
+std::atomic<bool> s_overrideActive{false};
+std::atomic<uint16_t> s_overrideButtons{0xFFFF};
+std::atomic<int> s_overrideFrames{0};
+}  // namespace
+
+void PCSX::Pads::setButtonsOverride(bool active, uint16_t buttons, int frames) {
+    s_overrideButtons.store(buttons);
+    s_overrideFrames.store(frames);
+    s_overrideActive.store(active);
+}
 
 class PadsImpl : public PCSX::Pads {
   public:
@@ -568,6 +581,17 @@ static constexpr float π(float fraction = 1.0f) { return fraction * M_PI; }
 
 void PadsImpl::Pad::getButtons() {
     PadData& pad = m_data;
+
+    if (s_overrideActive.load()) {
+        pad.buttonStatus = s_overrideButtons.load();
+        pad.leftJoyX = pad.rightJoyX = pad.leftJoyY = pad.rightJoyY = 0x80;
+        int frames = s_overrideFrames.load();
+        if (frames > 0 && s_overrideFrames.fetch_sub(1) == 1) {
+            s_overrideActive.store(false);
+        }
+        return;
+    }
+
     if (!m_settings.get<SettingConnected>()) {
         pad.buttonStatus = 0xffff;
         pad.leftJoyX = pad.rightJoyX = pad.leftJoyY = pad.rightJoyY = 0x80;

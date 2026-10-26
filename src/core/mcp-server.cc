@@ -39,6 +39,7 @@
 #include "core/cdrom.h"
 #include "cdrom/cdriso.h"
 #include "core/sstate.h"
+#include "core/pad.h"
 #include "core/debug.h"
 #include "core/gpulogger.h"
 #include "core/callstacks.h"
@@ -151,6 +152,12 @@ void MCPServer::RegisterToolsIfNeeded() {
     tools_["write_memory"] = {"write_memory", "Write 8, 16 or 32 bits to guest memory (address, value, size)"};
     tools_["save_state"] = {"save_state", "Serialize the emulator state to a file (path)"};
     tools_["load_state"] = {"load_state", "Load a serialized emulator state from a file (path)"};
+    tools_["pad_set"] = {"pad_set",
+                         "Set controller 1 buttons. pressed is a bitmask (1=pressed): "
+                         "0 Select,1 L3,2 R3,3 Start,4 Up,5 Right,6 Down,7 Left,8 L2,9 R2,"
+                         "10 L1,11 R1,12 Triangle,13 Circle,14 Cross,15 Square. "
+                         "frames=0 holds until pad_clear."};
+    tools_["pad_clear"] = {"pad_clear", "Release the controller override set by pad_set"};
 }
 
 std::vector<MCPServer::Tool> MCPServer::ListTools() {
@@ -263,6 +270,12 @@ MCPServer::ToolResult MCPServer::ExecuteTool(const std::string& tool_name, const
             return ToolSaveState(getRequiredString(args, "path", tool_name));
         } else if (tool_name == "load_state") {
             return ToolLoadState(getRequiredString(args, "path", tool_name));
+        } else if (tool_name == "pad_set") {
+            uint32_t pressed = getRequiredNumber(args, "pressed", tool_name);
+            uint32_t frames = args.value("frames", 0);
+            return ToolPadSet(pressed, frames);
+        } else if (tool_name == "pad_clear") {
+            return ToolPadClear();
         } else {
             return {false, "", "Unknown tool: " + tool_name};
         }
@@ -1995,6 +2008,27 @@ MCPServer::ToolResult MCPServer::ToolLoadState(const std::string& path) {
     result["bytes"] = data.size();
     result["message"] = "state loaded, emulator paused";
     return {true, result.dump(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolPadSet(uint32_t pressed, uint32_t frames) {
+    if (!g_emulator) {
+        return {false, "", "Emulator not initialized"};
+    }
+    uint16_t status = static_cast<uint16_t>(~pressed);
+    Pads::setButtonsOverride(true, status, static_cast<int>(frames));
+
+    nlohmann::json result;
+    result["pressed"] = pressed;
+    result["status"] = status;
+    result["frames"] = frames;
+    result["message"] = frames ? "override active for the requested frame count"
+                               : "override active until pad_clear";
+    return {true, result.dump(), ""};
+}
+
+MCPServer::ToolResult MCPServer::ToolPadClear() {
+    Pads::setButtonsOverride(false, 0xFFFF, 0);
+    return {true, "{\"status\":\"cleared\"}", ""};
 }
 
 } // namespace PCSX
