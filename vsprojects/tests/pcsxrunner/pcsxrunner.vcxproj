@@ -305,6 +305,7 @@
     <ClCompile Include="..\..\..\tests\spu\syncmix.cc" />
     <ClCompile Include="..\..\..\tests\core\pad-config.cc" />
     <ClCompile Include="..\..\..\tests\core\i18n.cc" />
+    <ClCompile Include="..\..\..\tests\core\mcp-server.cc" />
   </ItemGroup>
   <ItemGroup>
     <None Include="packages.config" />
