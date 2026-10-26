@@ -18,9 +18,8 @@
  ***************************************************************************/
 
 #include "core/psxemulator.h"
-#include "core/mcp-server.h" // Added for MCP Server integration
 
-#include <iostream> // Added for MCP server logging
+#include <iostream>  // Added for MCP server logging
 
 #include "core/alloc-tracker.h"
 #include "core/callstacks.h"
@@ -35,6 +34,7 @@
 #include "core/gpulogger.h"
 #include "core/gte.h"
 #include "core/luaiso.h"
+#include "core/mcp-server.h"  // Added for MCP Server integration
 #include "core/mdec.h"
 #include "core/pad.h"
 #include "core/patchmanager.h"
@@ -213,16 +213,16 @@ int PCSX::Emulator::init() {
         auto& webServerEnabled = debugSettings.get<PCSX::Emulator::DebugSettings::WebServer>();
         auto& webServerPort = debugSettings.get<PCSX::Emulator::DebugSettings::WebServerPort>();
         auto mcpPort = debugSettings.get<PCSX::Emulator::DebugSettings::MCPServerPort>().value;
-        
+
         if (!webServerEnabled.value) {
             webServerEnabled.value = true;
             webServerPort.value = mcpPort;
             std::cout << "MCP Server: Auto-enabled WebServer on port " << mcpPort << std::endl;
         } else if (webServerPort.value != mcpPort) {
-            std::cout << "MCP Server: Using existing WebServer port " << webServerPort.value 
+            std::cout << "MCP Server: Using existing WebServer port " << webServerPort.value
                       << " (ignoring MCPServerPort setting)" << std::endl;
         }
-        
+
         std::cout << "MCP endpoint available at http://localhost:" << webServerPort.value << "/mcp" << std::endl;
     }
 

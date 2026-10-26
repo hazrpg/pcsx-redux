@@ -27,10 +27,10 @@
 #include <unordered_map>
 #include <vector>
 
-#include "src/core/psxemulator.h" // Path relative to pcsx-redux/
-#include "src/core/psxmem.h"    // Path relative to pcsx-redux/
-#include "src/core/gpu.h"       // Path relative to pcsx-redux/
-#include "src/core/psxhw.h"     // Path relative to pcsx-redux/
+#include "src/core/gpu.h"          // Path relative to pcsx-redux/
+#include "src/core/psxemulator.h"  // Path relative to pcsx-redux/
+#include "src/core/psxhw.h"        // Path relative to pcsx-redux/
+#include "src/core/psxmem.h"       // Path relative to pcsx-redux/
 
 namespace PCSX {
 
@@ -91,12 +91,7 @@ class MCPServer {
      * @brief Memory Region State
      */
     struct MemoryRegion {
-        enum class Type {
-            RAM,
-            VRAM,
-            ROM,
-            HW
-        };
+        enum class Type { RAM, VRAM, ROM, HW };
 
         Type type;
         uint32_t start;
@@ -303,7 +298,8 @@ class MCPServer {
     static ToolResult ToolClearBreakpoint(uint32_t address);
     static ToolResult ToolGetCallChain(uint32_t max_depth);
     static ToolResult ToolGetCallGraph(const std::string& function_name, uint32_t depth);
-    static ToolResult ToolDumpMemory(uint32_t address, uint32_t length, const std::string& tag, const std::string& output_dir);
+    static ToolResult ToolDumpMemory(uint32_t address, uint32_t length, const std::string& tag,
+                                     const std::string& output_dir);
     static ToolResult ToolSnapshotRAM(const std::string& tag, const std::string& output_dir);
     static ToolResult ToolVRAMDump(const std::string& path);
     static ToolResult ToolScreenshot(const std::string& path);

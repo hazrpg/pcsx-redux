@@ -163,8 +163,8 @@ class Emulator {
                          GdbServer, GdbManifest, GdbLogSetting, GdbServerPort, GdbServerTrace, WebServer, WebServerPort,
                          MCPServer, MCPServerPort, KernelCallA0_00_1f, KernelCallA0_20_3f, KernelCallA0_40_5f,
                          KernelCallA0_60_7f, KernelCallA0_80_9f, KernelCallA0_a0_bf, KernelCallB0_00_1f,
-                         KernelCallB0_20_3f, KernelCallB0_40_5f, KernelCallC0_00_1f, DemangledSymbols, PCdrv,
-                         PCdrvBase, PCdrvNet, PCdrvNetAllow, SIO1Server, SIO1ServerPort, SIO1Client, SIO1ClientHost,
+                         KernelCallB0_20_3f, KernelCallB0_40_5f, KernelCallC0_00_1f, DemangledSymbols, PCdrv, PCdrvBase,
+                         PCdrvNet, PCdrvNetAllow, SIO1Server, SIO1ServerPort, SIO1Client, SIO1ClientHost,
                          SIO1ClientPort, SIO1ModeSetting>
             type;
     };

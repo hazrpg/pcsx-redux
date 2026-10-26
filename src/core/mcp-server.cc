@@ -19,35 +19,35 @@
 
 #include "mcp-server.h"
 
-#include <iostream>
-#include <string>
-#include <vector>
-#include <unordered_map>
-#include <set>
-#include <stdexcept>
-#include <iomanip>
-#include <sstream>
-#include <ctime>
-#include <chrono>
-#include <fstream>
-#include <filesystem>
 #include <cctype>
+#include <chrono>
 #include <cstring>
+#include <ctime>
+#include <filesystem>
+#include <fstream>
+#include <iomanip>
+#include <iostream>
 #include <iterator>
+#include <set>
+#include <sstream>
+#include <stdexcept>
+#include <string>
+#include <unordered_map>
+#include <vector>
 
-#include "third_party/json.hpp"
-#include "core/cdrom.h"
 #include "cdrom/cdriso.h"
-#include "core/sstate.h"
-#include "core/pad.h"
-#include "core/debug.h"
-#include "core/gpulogger.h"
 #include "core/callstacks.h"
+#include "core/cdrom.h"
+#include "core/debug.h"
 #include "core/disr3000a.h"
+#include "core/gpulogger.h"
+#include "core/pad.h"
+#include "core/sstate.h"
+#include "third_party/json.hpp"
 
 namespace PCSX {
 
-// Static member initialization  
+// Static member initialization
 MCPServer::Config MCPServer::config_;
 std::unordered_map<uint32_t, MCPServer::Breakpoint> MCPServer::breakpoints_;
 std::unordered_map<std::string, MCPServer::Tool> MCPServer::tools_;
@@ -74,9 +74,7 @@ static uint32_t parseAddress(const nlohmann::json& value) {
 }
 
 // Helper to get required string parameter with validation
-static std::string getRequiredString(const nlohmann::json& args, 
-                                    const std::string& key,
-                                    const std::string& tool_name) {
+static std::string getRequiredString(const nlohmann::json& args, const std::string& key, const std::string& tool_name) {
     if (!args.contains(key)) {
         throw std::runtime_error("Missing required parameter '" + key + "' for tool '" + tool_name + "'");
     }
@@ -87,20 +85,16 @@ static std::string getRequiredString(const nlohmann::json& args,
 }
 
 // Helper to get required address parameter with validation
-static uint32_t getRequiredAddress(const nlohmann::json& args,
-                                  const std::string& key,
-                                  const std::string& tool_name) {
+static uint32_t getRequiredAddress(const nlohmann::json& args, const std::string& key, const std::string& tool_name) {
     if (!args.contains(key)) {
-        throw std::runtime_error("Missing required parameter '" + key + "' for tool '" + tool_name + 
-                               "'. Provide as hex string (\"0x80010000\") or decimal number (2147549184)");
+        throw std::runtime_error("Missing required parameter '" + key + "' for tool '" + tool_name +
+                                 "'. Provide as hex string (\"0x80010000\") or decimal number (2147549184)");
     }
     return parseAddress(args.at(key));
 }
 
 // Helper to get required number parameter with validation
-static uint32_t getRequiredNumber(const nlohmann::json& args,
-                                 const std::string& key,
-                                 const std::string& tool_name) {
+static uint32_t getRequiredNumber(const nlohmann::json& args, const std::string& key, const std::string& tool_name) {
     if (!args.contains(key)) {
         throw std::runtime_error("Missing required parameter '" + key + "' for tool '" + tool_name + "'");
     }
@@ -133,7 +127,7 @@ void MCPServer::RegisterToolsIfNeeded() {
     tools_["get_call_graph"] = {"get_call_graph", "Get function call graph for a specific function"};
     tools_["get_emulator_state"] = {"get_emulator_state", "Get comprehensive emulator state"};
     tools_["is_game_loaded"] = {"is_game_loaded", "Check if a game/ISO is currently loaded and running"};
-    
+
     // Execution control tools
     tools_["pause"] = {"pause", "Pause emulator execution"};
     tools_["resume"] = {"resume", "Resume emulator execution"};
@@ -143,9 +137,10 @@ void MCPServer::RegisterToolsIfNeeded() {
     tools_["run_to_address"] = {"run_to_address", "Run emulator until specified address (address)"};
     tools_["get_execution_state"] = {"get_execution_state", "Get current execution state (running/paused)"};
     tools_["how_to_use_mcp"] = {"how_to_use_mcp", "Get AI-friendly guide on how to use MCP tools effectively"};
-    
+
     // Dynamic extraction tools for reverse engineering
-    tools_["dump_memory"] = {"dump_memory", "Dump a memory region to a .bin file + .json manifest (address, length, tag, output_dir)"};
+    tools_["dump_memory"] = {"dump_memory",
+                             "Dump a memory region to a .bin file + .json manifest (address, length, tag, output_dir)"};
     tools_["snapshot_ram"] = {"snapshot_ram", "Dump full 2MB WRAM to a .bin file + .json manifest (tag, output_dir)"};
     tools_["vram_dump"] = {"vram_dump", "Write the raw 1024x512 16-bit VRAM to a file (path)"};
     tools_["screenshot"] = {"screenshot", "Write the current framebuffer as a binary PPM to a file (path)"};
@@ -293,25 +288,25 @@ MCPServer::CPUState MCPServer::GetCPUState() {
     CPUState state = {};
     if (g_emulator && g_emulator->m_cpu) {
         state.pc = g_emulator->m_cpu->m_regs.pc;
-        state.sp = g_emulator->m_cpu->m_regs.GPR.r[29]; // SP is R29
-        state.gp = g_emulator->m_cpu->m_regs.GPR.r[28]; // GP is R28
-        state.fp = g_emulator->m_cpu->m_regs.GPR.r[30]; // FP is R30 (or S8)
-        state.ra = g_emulator->m_cpu->m_regs.GPR.r[31]; // RA is R31
+        state.sp = g_emulator->m_cpu->m_regs.GPR.r[29];  // SP is R29
+        state.gp = g_emulator->m_cpu->m_regs.GPR.r[28];  // GP is R28
+        state.fp = g_emulator->m_cpu->m_regs.GPR.r[30];  // FP is R30 (or S8)
+        state.ra = g_emulator->m_cpu->m_regs.GPR.r[31];  // RA is R31
         state.s0 = g_emulator->m_cpu->m_regs.GPR.r[16];
         state.s1 = g_emulator->m_cpu->m_regs.GPR.r[17];
         state.s2 = g_emulator->m_cpu->m_regs.GPR.r[18];
 
         state.instruction = g_emulator->m_cpu->m_regs.code;
-        
+
         // Format instruction as hex
         std::stringstream ss_inst;
         ss_inst << "0x" << std::hex << std::setfill('0') << std::setw(8) << state.instruction;
         state.instruction_hex = ss_inst.str();
-        
+
         // Decode instruction using PCSX-Redux disassembler
         uint32_t nextCode = 0;  // Next instruction (we don't have it here, use 0)
         std::string disasm = Disasm::asString(state.instruction, nextCode, state.pc, nullptr, false);
-        
+
         // Extract just the mnemonic part (after "PC CODE: ")
         // Format is: "80010000 12345678: ADD v0, v1, v2"
         size_t colonPos = disasm.find(':');
@@ -320,7 +315,7 @@ MCPServer::CPUState MCPServer::GetCPUState() {
         } else {
             state.instruction_decoded = disasm;
         }
-        
+
         // Parse instruction breakdown (opcode, function, etc.)
         // For now, use basic parsing - could be enhanced later
         uint32_t opcode = (state.instruction >> 26) & 0x3F;
@@ -328,7 +323,7 @@ MCPServer::CPUState MCPServer::GetCPUState() {
         uint32_t rs = (state.instruction >> 21) & 0x1F;
         uint32_t rt = (state.instruction >> 16) & 0x1F;
         uint32_t rd = (state.instruction >> 11) & 0x1F;
-        
+
         state.breakdown = {opcode, funct, Disasm::s_disRNameGPR[rs], Disasm::s_disRNameGPR[rt]};
     }
     return state;
@@ -336,7 +331,7 @@ MCPServer::CPUState MCPServer::GetCPUState() {
 
 MCPServer::MemoryState MCPServer::GetMemoryState() {
     MemoryState state = {};
-    
+
     if (!g_emulator || !g_emulator->m_mem) {
         // Return static info if emulator not initialized
         state.regions["ram"] = {MemoryRegion::Type::RAM, 0x00000000, 0x00200000, "2 MB"};
@@ -346,11 +341,11 @@ MCPServer::MemoryState MCPServer::GetMemoryState() {
         state.regions["hardware"] = {MemoryRegion::Type::HW, 0x1F000000, 0x1F0000FF, "256 B"};
         return state;
     }
-    
+
     // Get current PC to determine active memory region
     uint32_t pc = g_emulator->m_cpu->m_regs.pc;
     std::string active_region = "unknown";
-    
+
     // Define all memory regions with dynamic info
     state.regions["ram"] = {MemoryRegion::Type::RAM, 0x00000000, 0x00200000, "2 MB"};
     state.regions["scratchpad"] = {MemoryRegion::Type::RAM, 0x1F800000, 0x1F800400, "1 KB"};
@@ -364,7 +359,7 @@ MCPServer::MemoryState MCPServer::GetMemoryState() {
     state.regions["dma_regs"] = {MemoryRegion::Type::HW, 0x1F801080, 0x1F8010F8, "120 B"};
     state.regions["timer_regs"] = {MemoryRegion::Type::HW, 0x1F801100, 0x1F801130, "48 B"};
     state.regions["gpu_regs"] = {MemoryRegion::Type::HW, 0x1F801810, 0x1F801818, "8 B"};
-    
+
     // Determine active region based on PC
     if (pc >= 0x00000000 && pc < 0x00200000) {
         active_region = "ram";
@@ -383,10 +378,10 @@ MCPServer::MemoryState MCPServer::GetMemoryState() {
     } else if (pc >= 0x1F801000 && pc < 0x1F802000) {
         active_region = "hardware_regs";
     }
-    
+
     // Add dynamic memory usage info
     state.regions["active_pc"] = {MemoryRegion::Type::RAM, pc, pc, active_region};
-    
+
     // Check for RAM initialization by sampling first KB
     int non_zero_count = 0;
     for (uint32_t i = 0; i < 256; i++) {
@@ -396,7 +391,7 @@ MCPServer::MemoryState MCPServer::GetMemoryState() {
     }
     std::string ram_usage = (non_zero_count > 0) ? "Initialized" : "Uninitialized";
     state.regions["ram_status"] = {MemoryRegion::Type::RAM, 0, (uint32_t)non_zero_count, ram_usage};
-    
+
     return state;
 }
 
@@ -417,9 +412,9 @@ MCPServer::GPUState MCPServer::GetGPUState() {
 
 MCPServer::HardwareState MCPServer::GetHardwareState() {
     HardwareState state = {};
-    if (g_emulator && g_emulator->m_gpu && g_emulator->m_counters /* && g_emulator->m_hw for DMA */) { // m_hw for DMA
+    if (g_emulator && g_emulator->m_gpu && g_emulator->m_counters /* && g_emulator->m_hw for DMA */) {  // m_hw for DMA
         // GPU
-        state.gpu = {0,0,0,0}; // TODO: Populate with actual GPU register values
+        state.gpu = {0, 0, 0, 0};  // TODO: Populate with actual GPU register values
 
         // DMA
         for (int i = 0; i < 8; ++i) {
@@ -438,12 +433,12 @@ MCPServer::HardwareState MCPServer::GetHardwareState() {
 
 std::vector<MCPServer::Breakpoint> MCPServer::GetBreakpoints() {
     std::vector<Breakpoint> list;
-    
+
     // First add our locally tracked breakpoints
     for (const auto& pair : breakpoints_) {
         list.push_back(pair.second);
     }
-    
+
     // Then add breakpoints from the emulator's debug system
     if (g_emulator && g_emulator->m_debug) {
         const auto& tree = g_emulator->m_debug->getTree();
@@ -453,16 +448,22 @@ std::vector<MCPServer::Breakpoint> MCPServer::GetBreakpoints() {
             if (breakpoints_.find(addr) == breakpoints_.end()) {
                 std::string type_str = "exec";
                 switch (bp.type()) {
-                    case Debug::BreakpointType::Exec: type_str = "exec"; break;
-                    case Debug::BreakpointType::Read: type_str = "read"; break;
-                    case Debug::BreakpointType::Write: type_str = "write"; break;
+                    case Debug::BreakpointType::Exec:
+                        type_str = "exec";
+                        break;
+                    case Debug::BreakpointType::Read:
+                        type_str = "read";
+                        break;
+                    case Debug::BreakpointType::Write:
+                        type_str = "write";
+                        break;
                 }
                 std::string label = bp.label();
                 list.push_back({addr, type_str, false, bp.enabled()});
             }
         }
     }
-    
+
     return list;
 }
 
@@ -471,45 +472,40 @@ bool MCPServer::SetBreakpoint(uint32_t address, const std::string& condition) {
         std::cout << "Cannot set breakpoint: emulator or debug not initialized" << std::endl;
         return false;
     }
-    
+
     // Add the breakpoint using default invoker (like GUI does)
     // Use the overload with label for better identification
     std::stringstream ss_label;
     ss_label << "MCP_0x" << std::hex << std::setfill('0') << std::setw(8) << address;
     std::string label = ss_label.str();
-    Debug::Breakpoint* bp = g_emulator->m_debug->addBreakpoint(
-        address, 
-        Debug::BreakpointType::Exec, 
-        4, 
-        "MCP", 
-        label
-        // Using default invoker which calls g_system->pause()
+    Debug::Breakpoint* bp = g_emulator->m_debug->addBreakpoint(address, Debug::BreakpointType::Exec, 4, "MCP", label
+                                                               // Using default invoker which calls g_system->pause()
     );
-    
+
     if (bp) {
         // Enable the breakpoint (should be enabled by default, but ensure it is)
         bp->enable();
-        std::cout << "Set breakpoint at 0x" << std::hex << address << std::dec 
-                  << " (normalized: 0x" << (address & ~0xe0000000) << ")" << std::endl;
-        
+        std::cout << "Set breakpoint at 0x" << std::hex << address << std::dec << " (normalized: 0x"
+                  << (address & ~0xe0000000) << ")" << std::endl;
+
         // Track in our local storage for MCP management
         breakpoints_[address] = {address, condition, false, true};
         return true;
     }
-    
+
     std::cout << "Failed to set breakpoint at 0x" << std::hex << address << std::dec << std::endl;
     return false;
 }
 
 bool MCPServer::ClearBreakpoint(uint32_t address) {
     bool cleared = false;
-    
+
     // Clear from our local tracking
     if (breakpoints_.count(address)) {
         breakpoints_.erase(address);
         cleared = true;
     }
-    
+
     // Clear from emulator's debug system
     if (g_emulator && g_emulator->m_debug) {
         const auto& tree = g_emulator->m_debug->getTree();
@@ -522,11 +518,11 @@ bool MCPServer::ClearBreakpoint(uint32_t address) {
             }
         }
     }
-    
+
     if (cleared) {
         std::cout << "Cleared breakpoint at 0x" << std::hex << address << std::dec << std::endl;
     }
-    
+
     return cleared;
 }
 
@@ -534,117 +530,109 @@ std::vector<std::string> MCPServer::ListHardwareRegisters() {
     // List of all known PSX hardware registers
     return {
         // Interrupt Control
-        "I_STAT",    // 0x1070 - Interrupt Status
-        "I_MASK",    // 0x1074 - Interrupt Mask
-        
+        "I_STAT",  // 0x1070 - Interrupt Status
+        "I_MASK",  // 0x1074 - Interrupt Mask
+
         // DMA Registers
         "DMA_DPCR",  // 0x10f0 - DMA Control
         "DMA_DICR",  // 0x10f4 - DMA Interrupt Control
-        
+
         // DMA Channel 0 (MDECin)
-        "DMA0_MADR", // 0x1080 - Memory Address
-        "DMA0_BCR",  // 0x1084 - Block Control
-        "DMA0_CHCR", // 0x1088 - Channel Control
-        
+        "DMA0_MADR",  // 0x1080 - Memory Address
+        "DMA0_BCR",   // 0x1084 - Block Control
+        "DMA0_CHCR",  // 0x1088 - Channel Control
+
         // DMA Channel 1 (MDECout)
-        "DMA1_MADR", // 0x1090
-        "DMA1_BCR",  // 0x1094
-        "DMA1_CHCR", // 0x1098
-        
+        "DMA1_MADR",  // 0x1090
+        "DMA1_BCR",   // 0x1094
+        "DMA1_CHCR",  // 0x1098
+
         // DMA Channel 2 (GPU)
-        "DMA2_MADR", // 0x10a0
-        "DMA2_BCR",  // 0x10a4
-        "DMA2_CHCR", // 0x10a8
-        
+        "DMA2_MADR",  // 0x10a0
+        "DMA2_BCR",   // 0x10a4
+        "DMA2_CHCR",  // 0x10a8
+
         // DMA Channel 3 (CDROM)
-        "DMA3_MADR", // 0x10b0
-        "DMA3_BCR",  // 0x10b4
-        "DMA3_CHCR", // 0x10b8
-        
+        "DMA3_MADR",  // 0x10b0
+        "DMA3_BCR",   // 0x10b4
+        "DMA3_CHCR",  // 0x10b8
+
         // DMA Channel 4 (SPU)
-        "DMA4_MADR", // 0x10c0
-        "DMA4_BCR",  // 0x10c4
-        "DMA4_CHCR", // 0x10c8
-        
+        "DMA4_MADR",  // 0x10c0
+        "DMA4_BCR",   // 0x10c4
+        "DMA4_CHCR",  // 0x10c8
+
         // DMA Channel 5 (PIO)
-        "DMA5_MADR", // 0x10d0
-        "DMA5_BCR",  // 0x10d4
-        "DMA5_CHCR", // 0x10d8
-        
+        "DMA5_MADR",  // 0x10d0
+        "DMA5_BCR",   // 0x10d4
+        "DMA5_CHCR",  // 0x10d8
+
         // DMA Channel 6 (OTC)
-        "DMA6_MADR", // 0x10e0
-        "DMA6_BCR",  // 0x10e4
-        "DMA6_CHCR", // 0x10e8
-        
+        "DMA6_MADR",  // 0x10e0
+        "DMA6_BCR",   // 0x10e4
+        "DMA6_CHCR",  // 0x10e8
+
         // Timers
-        "TIMER0_COUNT", // 0x1100
-        "TIMER0_MODE",  // 0x1104
-        "TIMER0_TARGET",// 0x1108
-        "TIMER1_COUNT", // 0x1110
-        "TIMER1_MODE",  // 0x1114
-        "TIMER1_TARGET",// 0x1118
-        "TIMER2_COUNT", // 0x1120
-        "TIMER2_MODE",  // 0x1124
-        "TIMER2_TARGET" // 0x1128
+        "TIMER0_COUNT",   // 0x1100
+        "TIMER0_MODE",    // 0x1104
+        "TIMER0_TARGET",  // 0x1108
+        "TIMER1_COUNT",   // 0x1110
+        "TIMER1_MODE",    // 0x1114
+        "TIMER1_TARGET",  // 0x1118
+        "TIMER2_COUNT",   // 0x1120
+        "TIMER2_MODE",    // 0x1124
+        "TIMER2_TARGET"   // 0x1128
     };
 }
 
 uint32_t MCPServer::ReadHardwareRegister(const std::string& register_name) {
     // Map register names to hardware offsets
     static const std::unordered_map<std::string, uint16_t> register_map = {
-        {"I_STAT", 0x1070}, {"I_MASK", 0x1074},
-        {"DMA_DPCR", 0x10f0}, {"DMA_DICR", 0x10f4},
-        {"DMA0_MADR", 0x1080}, {"DMA0_BCR", 0x1084}, {"DMA0_CHCR", 0x1088},
-        {"DMA1_MADR", 0x1090}, {"DMA1_BCR", 0x1094}, {"DMA1_CHCR", 0x1098},
-        {"DMA2_MADR", 0x10a0}, {"DMA2_BCR", 0x10a4}, {"DMA2_CHCR", 0x10a8},
-        {"DMA3_MADR", 0x10b0}, {"DMA3_BCR", 0x10b4}, {"DMA3_CHCR", 0x10b8},
-        {"DMA4_MADR", 0x10c0}, {"DMA4_BCR", 0x10c4}, {"DMA4_CHCR", 0x10c8},
-        {"DMA5_MADR", 0x10d0}, {"DMA5_BCR", 0x10d4}, {"DMA5_CHCR", 0x10d8},
-        {"DMA6_MADR", 0x10e0}, {"DMA6_BCR", 0x10e4}, {"DMA6_CHCR", 0x10e8},
-        {"TIMER0_COUNT", 0x1100}, {"TIMER0_MODE", 0x1104}, {"TIMER0_TARGET", 0x1108},
-        {"TIMER1_COUNT", 0x1110}, {"TIMER1_MODE", 0x1114}, {"TIMER1_TARGET", 0x1118},
-        {"TIMER2_COUNT", 0x1120}, {"TIMER2_MODE", 0x1124}, {"TIMER2_TARGET", 0x1128}
-    };
-    
+        {"I_STAT", 0x1070},       {"I_MASK", 0x1074},       {"DMA_DPCR", 0x10f0},      {"DMA_DICR", 0x10f4},
+        {"DMA0_MADR", 0x1080},    {"DMA0_BCR", 0x1084},     {"DMA0_CHCR", 0x1088},     {"DMA1_MADR", 0x1090},
+        {"DMA1_BCR", 0x1094},     {"DMA1_CHCR", 0x1098},    {"DMA2_MADR", 0x10a0},     {"DMA2_BCR", 0x10a4},
+        {"DMA2_CHCR", 0x10a8},    {"DMA3_MADR", 0x10b0},    {"DMA3_BCR", 0x10b4},      {"DMA3_CHCR", 0x10b8},
+        {"DMA4_MADR", 0x10c0},    {"DMA4_BCR", 0x10c4},     {"DMA4_CHCR", 0x10c8},     {"DMA5_MADR", 0x10d0},
+        {"DMA5_BCR", 0x10d4},     {"DMA5_CHCR", 0x10d8},    {"DMA6_MADR", 0x10e0},     {"DMA6_BCR", 0x10e4},
+        {"DMA6_CHCR", 0x10e8},    {"TIMER0_COUNT", 0x1100}, {"TIMER0_MODE", 0x1104},   {"TIMER0_TARGET", 0x1108},
+        {"TIMER1_COUNT", 0x1110}, {"TIMER1_MODE", 0x1114},  {"TIMER1_TARGET", 0x1118}, {"TIMER2_COUNT", 0x1120},
+        {"TIMER2_MODE", 0x1124},  {"TIMER2_TARGET", 0x1128}};
+
     auto it = register_map.find(register_name);
     if (it == register_map.end()) {
         std::cout << "Unknown hardware register: " << register_name << std::endl;
         return 0;
     }
-    
+
     // Read from emulator's hardware register buffer
     uint16_t offset = it->second;
-    uint32_t *ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[offset]);
+    uint32_t* ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[offset]);
     return *ptr;
 }
 
 bool MCPServer::WriteHardwareRegister(const std::string& register_name, uint32_t value) {
     // Map register names to hardware offsets
     static const std::unordered_map<std::string, uint16_t> register_map = {
-        {"I_STAT", 0x1070}, {"I_MASK", 0x1074},
-        {"DMA_DPCR", 0x10f0}, {"DMA_DICR", 0x10f4},
-        {"DMA0_MADR", 0x1080}, {"DMA0_BCR", 0x1084}, {"DMA0_CHCR", 0x1088},
-        {"DMA1_MADR", 0x1090}, {"DMA1_BCR", 0x1094}, {"DMA1_CHCR", 0x1098},
-        {"DMA2_MADR", 0x10a0}, {"DMA2_BCR", 0x10a4}, {"DMA2_CHCR", 0x10a8},
-        {"DMA3_MADR", 0x10b0}, {"DMA3_BCR", 0x10b4}, {"DMA3_CHCR", 0x10b8},
-        {"DMA4_MADR", 0x10c0}, {"DMA4_BCR", 0x10c4}, {"DMA4_CHCR", 0x10c8},
-        {"DMA5_MADR", 0x10d0}, {"DMA5_BCR", 0x10d4}, {"DMA5_CHCR", 0x10d8},
-        {"DMA6_MADR", 0x10e0}, {"DMA6_BCR", 0x10e4}, {"DMA6_CHCR", 0x10e8},
-        {"TIMER0_COUNT", 0x1100}, {"TIMER0_MODE", 0x1104}, {"TIMER0_TARGET", 0x1108},
-        {"TIMER1_COUNT", 0x1110}, {"TIMER1_MODE", 0x1114}, {"TIMER1_TARGET", 0x1118},
-        {"TIMER2_COUNT", 0x1120}, {"TIMER2_MODE", 0x1124}, {"TIMER2_TARGET", 0x1128}
-    };
-    
+        {"I_STAT", 0x1070},       {"I_MASK", 0x1074},       {"DMA_DPCR", 0x10f0},      {"DMA_DICR", 0x10f4},
+        {"DMA0_MADR", 0x1080},    {"DMA0_BCR", 0x1084},     {"DMA0_CHCR", 0x1088},     {"DMA1_MADR", 0x1090},
+        {"DMA1_BCR", 0x1094},     {"DMA1_CHCR", 0x1098},    {"DMA2_MADR", 0x10a0},     {"DMA2_BCR", 0x10a4},
+        {"DMA2_CHCR", 0x10a8},    {"DMA3_MADR", 0x10b0},    {"DMA3_BCR", 0x10b4},      {"DMA3_CHCR", 0x10b8},
+        {"DMA4_MADR", 0x10c0},    {"DMA4_BCR", 0x10c4},     {"DMA4_CHCR", 0x10c8},     {"DMA5_MADR", 0x10d0},
+        {"DMA5_BCR", 0x10d4},     {"DMA5_CHCR", 0x10d8},    {"DMA6_MADR", 0x10e0},     {"DMA6_BCR", 0x10e4},
+        {"DMA6_CHCR", 0x10e8},    {"TIMER0_COUNT", 0x1100}, {"TIMER0_MODE", 0x1104},   {"TIMER0_TARGET", 0x1108},
+        {"TIMER1_COUNT", 0x1110}, {"TIMER1_MODE", 0x1114},  {"TIMER1_TARGET", 0x1118}, {"TIMER2_COUNT", 0x1120},
+        {"TIMER2_MODE", 0x1124},  {"TIMER2_TARGET", 0x1128}};
+
     auto it = register_map.find(register_name);
     if (it == register_map.end()) {
         std::cout << "Unknown hardware register: " << register_name << std::endl;
         return false;
     }
-    
+
     // Write to emulator's hardware register buffer
     // WARNING: Direct writes may bypass emulator logic - use with caution!
     uint16_t offset = it->second;
-    uint32_t *ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[offset]);
+    uint32_t* ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[offset]);
     *ptr = value;
     std::cout << "Wrote 0x" << std::hex << value << std::dec << " to " << register_name << std::endl;
     return true;
@@ -652,72 +640,71 @@ bool MCPServer::WriteHardwareRegister(const std::string& register_name, uint32_t
 
 MCPServer::HardwareState::DMAChannel MCPServer::GetDMAState(uint32_t channel) {
     if (channel >= 7) {
-        return {0, 0, false, 0, 0}; // Invalid channel
+        return {0, 0, false, 0, 0};  // Invalid channel
     }
-    
+
     // Each DMA channel has 3 registers at offset 0x10 from each other
     // Base is 0x1080, each channel offset by 0x10
     uint16_t base_offset = 0x1080 + (channel * 0x10);
-    
+
     // Read MADR (Memory Address Register) at offset +0
-    uint32_t *madr_ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[base_offset]);
+    uint32_t* madr_ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[base_offset]);
     uint32_t madr = *madr_ptr;
-    
+
     // Read BCR (Block Control Register) at offset +4
-    uint32_t *bcr_ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[base_offset + 4]);
+    uint32_t* bcr_ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[base_offset + 4]);
     uint32_t bcr = *bcr_ptr;
-    
+
     // Read CHCR (Channel Control Register) at offset +8
-    uint32_t *chcr_ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[base_offset + 8]);
+    uint32_t* chcr_ptr = reinterpret_cast<uint32_t*>(&g_emulator->m_mem->m_hard[base_offset + 8]);
     uint32_t chcr = *chcr_ptr;
-    
+
     // Extract values from registers
-    bool enabled = (chcr & 0x01000000) != 0; // Bit 24 indicates if DMA is active
+    bool enabled = (chcr & 0x01000000) != 0;  // Bit 24 indicates if DMA is active
     uint32_t block_size = bcr >> 16;
     uint32_t block_count = bcr & 0xFFFF;
-    
+
     return {madr, bcr, enabled, block_size, block_count};
 }
 
 std::vector<std::string> MCPServer::GetCallChain(uint32_t max_depth) {
     std::vector<std::string> chain;
-    
+
     if (!g_emulator || !g_emulator->m_callStacks) {
         chain.push_back("Error: Emulator or CallStacks not initialized");
         return chain;
     }
-    
+
     // Check if we have a current call stack
     if (!g_emulator->m_callStacks->hasCurrent()) {
         // No call stack available yet - return current PC as the only entry
         uint32_t pc = g_emulator->m_cpu->m_regs.pc;
         uint32_t ra = g_emulator->m_cpu->m_regs.GPR.r[31];  // Return address (ra/$31)
-        
+
         std::stringstream ss;
-        ss << "0x" << std::hex << std::setfill('0') << std::setw(8) << pc 
+        ss << "0x" << std::hex << std::setfill('0') << std::setw(8) << pc
            << " - current instruction (no call stack yet)";
         chain.push_back(ss.str());
-        
+
         if (ra != 0 && ra != 0xFFFFFFFF) {
             std::stringstream ss_ra;
-            ss_ra << "0x" << std::hex << std::setfill('0') << std::setw(8) << ra 
-                  << " - return address (ra/$31)";
+            ss_ra << "0x" << std::hex << std::setfill('0') << std::setw(8) << ra << " - return address (ra/$31)";
             chain.push_back(ss_ra.str());
         }
-        
+
         return chain;
     }
-    
+
     // Get the current call stack
     const auto& callStack = g_emulator->m_callStacks->getCurrent();
-    
+
     // Add current PC at top of stack
     uint32_t pc = g_emulator->m_cpu->m_regs.pc;
     std::stringstream ss_pc;
-    ss_pc << "0x" << std::hex << std::setfill('0') << std::setw(8) << pc 
-          << " - current instruction (SP: 0x" << callStack.ra << ")";
+    ss_pc << "0x" << std::hex << std::setfill('0') << std::setw(8) << pc << " - current instruction (SP: 0x"
+          << callStack.ra << ")";
     chain.push_back(ss_pc.str());
-    
+
     // Iterate through the call stack
     uint32_t depth = 0;
     for (const auto& call : callStack.calls) {
@@ -725,36 +712,36 @@ std::vector<std::string> MCPServer::GetCallChain(uint32_t max_depth) {
             chain.push_back("... (truncated at depth " + std::to_string(max_depth) + ")");
             break;
         }
-        
+
         std::stringstream ss;
         ss << "0x" << std::hex << std::setfill('0') << std::setw(8) << call.ra;
-        
+
         if (call.shadow) {
             ss << " - function (shadow stack)";
         } else {
             ss << " - function (FP: 0x" << std::hex << call.fp << ", SP: 0x" << call.sp << ")";
         }
-        
+
         chain.push_back(ss.str());
         depth++;
     }
-    
+
     return chain;
 }
 
 std::vector<std::string> MCPServer::GetCallGraph(const std::string& function_name, uint32_t depth) {
     std::vector<std::string> graph;
-    
+
     if (!g_emulator || !g_emulator->m_callStacks) {
         graph.push_back("Error: Emulator or CallStacks not initialized");
         return graph;
     }
-    
+
     // Build dynamic call graph from available call stacks
     std::set<uint32_t> callers;
     std::set<uint32_t> callees;
     uint32_t target_addr = 0;
-    
+
     // Try to parse function address from function_name if it's a hex string
     try {
         if (function_name.substr(0, 2) == "0x") {
@@ -766,37 +753,37 @@ std::vector<std::string> MCPServer::GetCallGraph(const std::string& function_nam
             target_addr = g_emulator->m_cpu->m_regs.pc;
         }
     }
-    
+
     // Get all call stacks from the tree
     const auto& callstacks = g_emulator->m_callStacks->getCallstacks();
-    
+
     // Analyze each call stack
     for (const auto& stack : callstacks) {
         uint32_t prev_ra = stack.ra;
-        
+
         for (const auto& call : stack.calls) {
             // If this call's return address matches our target, this function called our target
             if (call.ra == target_addr) {
                 callers.insert(prev_ra);
             }
-            
+
             // If the previous call's return address matches our target, this is a callee
             if (prev_ra == target_addr && call.ra != target_addr) {
                 callees.insert(call.ra);
             }
-            
+
             prev_ra = call.ra;
-            
+
             if (callers.size() >= depth && callees.size() >= depth) {
                 break;
             }
         }
-        
+
         if (callers.size() >= depth && callees.size() >= depth) {
             break;
         }
     }
-    
+
     // Format the results
     std::stringstream ss_callers;
     ss_callers << function_name << " callers: [";
@@ -808,7 +795,7 @@ std::vector<std::string> MCPServer::GetCallGraph(const std::string& function_nam
     }
     ss_callers << "]";
     graph.push_back(ss_callers.str());
-    
+
     std::stringstream ss_callees;
     ss_callees << function_name << " callees: [";
     first = true;
@@ -819,12 +806,12 @@ std::vector<std::string> MCPServer::GetCallGraph(const std::string& function_nam
     }
     ss_callees << "]";
     graph.push_back(ss_callees.str());
-    
+
     // Add note about dynamic analysis
     if (callers.empty() && callees.empty()) {
         graph.push_back("Note: No call relationships detected yet. Run emulation to collect dynamic profiling data.");
     }
-    
+
     return graph;
 }
 
@@ -837,12 +824,10 @@ std::string MCPServer::GetEmulatorState() {
     state_json["hardware_state"] = nlohmann::json::parse(SerializeState(GetHardwareState()));
     state_json["breakpoints"] = nlohmann::json::array();
     for (const auto& bp : breakpoints_) {
-        state_json["breakpoints"].push_back({
-            {"address", bp.second.address},
-            {"condition", bp.second.condition},
-            {"hit", bp.second.hit},
-            {"enabled", bp.second.enabled}
-        });
+        state_json["breakpoints"].push_back({{"address", bp.second.address},
+                                             {"condition", bp.second.condition},
+                                             {"hit", bp.second.hit},
+                                             {"enabled", bp.second.enabled}});
     }
     return state_json.dump(2);
 }
@@ -867,28 +852,24 @@ std::string MCPServer::HandleMCPRequest(const std::string& request_str) {
             // Standard MCP initialize method
             response_json["result"] = {
                 {"protocolVersion", "2024-11-05"},
-                {"capabilities", {
-                    {"tools", nlohmann::json::object()}
-                }},
-                {"serverInfo", {
-                    {"name", "PCSX-Redux MCP Server"},
-                    {"version", "1.0.0"},
-                    {"notes", "This MCP server is experimental and under active development. Some tools may have limited functionality or return mock data. Use with caution for critical analysis tasks."}
-                }}
-            };
+                {"capabilities", {{"tools", nlohmann::json::object()}}},
+                {"serverInfo",
+                 {{"name", "PCSX-Redux MCP Server"},
+                  {"version", "1.0.0"},
+                  {"notes",
+                   "This MCP server is experimental and under active development. Some tools may have limited "
+                   "functionality or return mock data. Use with caution for critical analysis tasks."}}}};
         } else if (method == "tools/list") {
             // Standard MCP tools/list method
             nlohmann::json tools_array = nlohmann::json::array();
             for (const auto& tool : ListTools()) {
-                tools_array.push_back({
-                    {"name", tool.name},
-                    {"description", tool.description},
-                    {"inputSchema", {
-                        {"type", "object"},
-                        {"properties", nlohmann::json::object()}
-                    }},
-                    {"notes", "This MCP server is experimental and under active development. Some tools may return mock data or have limited functionality. Use with caution for critical analysis tasks."}
-                });
+                tools_array.push_back(
+                    {{"name", tool.name},
+                     {"description", tool.description},
+                     {"inputSchema", {{"type", "object"}, {"properties", nlohmann::json::object()}}},
+                     {"notes",
+                      "This MCP server is experimental and under active development. Some tools may return mock data "
+                      "or have limited functionality. Use with caution for critical analysis tasks."}});
             }
             response_json["result"] = {{"tools", tools_array}};
         } else if (method == "tools/call") {
@@ -898,49 +879,27 @@ std::string MCPServer::HandleMCPRequest(const std::string& request_str) {
             ToolResult result = ExecuteTool(tool_name, args_json.dump());
             if (result.success) {
                 response_json["result"] = {
-                    {"content", nlohmann::json::array({
-                        {
-                            {"type", "text"},
-                            {"text", result.content}
-                        }
-                    })}
-                };
+                    {"content", nlohmann::json::array({{{"type", "text"}, {"text", result.content}}})}};
             } else {
-                response_json["error"] = {
-                    {"code", -32000},
-                    {"message", result.error}
-                };
+                response_json["error"] = {{"code", -32000}, {"message", result.error}};
             }
         } else {
-            response_json["error"] = {
-                {"code", -32601},
-                {"message", "Method not found"}
-            };
+            response_json["error"] = {{"code", -32601}, {"message", "Method not found"}};
         }
     } catch (const nlohmann::json::exception& e) {
         response_json["jsonrpc"] = "2.0";
-        response_json["error"] = {
-            {"code", -32700},
-            {"message", "Parse error: " + std::string(e.what())}
-        };
+        response_json["error"] = {{"code", -32700}, {"message", "Parse error: " + std::string(e.what())}};
     } catch (const std::exception& e) {
         response_json["jsonrpc"] = "2.0";
-        response_json["error"] = {
-            {"code", -32000},
-            {"message", "Server error: " + std::string(e.what())}
-        };
+        response_json["error"] = {{"code", -32000}, {"message", "Server error: " + std::string(e.what())}};
     }
 
     return response_json.dump();
 }
 
-MCPServer::ToolResult MCPServer::ToolGetCPUState() {
-    return {true, SerializeState(GetCPUState()), ""};
-}
+MCPServer::ToolResult MCPServer::ToolGetCPUState() { return {true, SerializeState(GetCPUState()), ""}; }
 
-MCPServer::ToolResult MCPServer::ToolGetMemoryMap() {
-    return {true, SerializeState(GetMemoryState()), ""};
-}
+MCPServer::ToolResult MCPServer::ToolGetMemoryMap() { return {true, SerializeState(GetMemoryState()), ""}; }
 
 MCPServer::ToolResult MCPServer::ToolGetMemoryRange(uint32_t address, uint32_t length) {
     std::vector<uint8_t> data;
@@ -952,7 +911,7 @@ MCPServer::ToolResult MCPServer::ToolGetMemoryRange(uint32_t address, uint32_t l
     } else {
         return {false, "", "Emulator not initialized"};
     }
-    
+
     nlohmann::json result_json;
     result_json["address"] = address;
     result_json["length"] = length;
@@ -964,11 +923,11 @@ MCPServer::ToolResult MCPServer::ToolFindString(const std::string& pattern, cons
     if (!g_emulator || !g_emulator->m_mem) {
         return {false, "", "Emulator not initialized"};
     }
-    
+
     // Determine search region
     uint32_t start_addr = 0;
     uint32_t end_addr = 0;
-    
+
     if (region == "ram") {
         start_addr = 0x00000000;
         end_addr = 0x00200000;  // 2MB RAM
@@ -979,18 +938,18 @@ MCPServer::ToolResult MCPServer::ToolFindString(const std::string& pattern, cons
         start_addr = 0x00000000;
         end_addr = 0x00200000;  // Default to RAM
     }
-    
+
     nlohmann::json result_json;
     result_json["pattern"] = pattern;
     result_json["region"] = region;
     result_json["results"] = nlohmann::json::array();
-    
+
     // Search for the pattern in memory
     size_t pattern_len = pattern.length();
     if (pattern_len == 0) {
         return {true, result_json.dump(), ""};
     }
-    
+
     for (uint32_t addr = start_addr; addr <= end_addr - pattern_len; ++addr) {
         bool match = true;
         for (size_t i = 0; i < pattern_len; ++i) {
@@ -1000,7 +959,7 @@ MCPServer::ToolResult MCPServer::ToolFindString(const std::string& pattern, cons
                 break;
             }
         }
-        
+
         if (match) {
             // Read a bit more context
             std::string context;
@@ -1014,14 +973,11 @@ MCPServer::ToolResult MCPServer::ToolFindString(const std::string& pattern, cons
                     context += '.';
                 }
             }
-            
-            result_json["results"].push_back({
-                {"address", addr},
-                {"content", context}
-            });
+
+            result_json["results"].push_back({{"address", addr}, {"content", context}});
         }
     }
-    
+
     return {true, result_json.dump(), ""};
 }
 
@@ -1029,11 +985,11 @@ MCPServer::ToolResult MCPServer::ToolSearchBytes(const std::string& pattern, con
     if (!g_emulator || !g_emulator->m_mem) {
         return {false, "", "Emulator not initialized"};
     }
-    
+
     // Determine search region
     uint32_t start_addr = 0;
     uint32_t end_addr = 0;
-    
+
     if (region == "ram") {
         start_addr = 0x00000000;
         end_addr = 0x00200000;  // 2MB RAM
@@ -1044,7 +1000,7 @@ MCPServer::ToolResult MCPServer::ToolSearchBytes(const std::string& pattern, con
         start_addr = 0x00000000;
         end_addr = 0x00200000;  // Default to RAM
     }
-    
+
     // Parse hex pattern (e.g., "0A 1B 2C" or "0a1b2c")
     std::vector<uint8_t> search_bytes;
     std::string clean_pattern;
@@ -1053,7 +1009,7 @@ MCPServer::ToolResult MCPServer::ToolSearchBytes(const std::string& pattern, con
             clean_pattern += c;
         }
     }
-    
+
     // Convert hex string to bytes
     for (size_t i = 0; i < clean_pattern.length(); i += 2) {
         if (i + 1 < clean_pattern.length()) {
@@ -1066,16 +1022,16 @@ MCPServer::ToolResult MCPServer::ToolSearchBytes(const std::string& pattern, con
             }
         }
     }
-    
+
     if (search_bytes.empty()) {
         return {false, "", "Empty search pattern"};
     }
-    
+
     nlohmann::json result_json;
     result_json["pattern"] = pattern;
     result_json["region"] = region;
     result_json["results"] = nlohmann::json::array();
-    
+
     // Search for byte pattern in memory
     size_t pattern_len = search_bytes.size();
     for (uint32_t addr = start_addr; addr <= end_addr - pattern_len; ++addr) {
@@ -1087,15 +1043,12 @@ MCPServer::ToolResult MCPServer::ToolSearchBytes(const std::string& pattern, con
                 break;
             }
         }
-        
+
         if (match) {
-            result_json["results"].push_back({
-                {"address", addr},
-                {"length", pattern_len}
-            });
+            result_json["results"].push_back({{"address", addr}, {"length", pattern_len}});
         }
     }
-    
+
     return {true, result_json.dump(), ""};
 }
 
@@ -1103,10 +1056,10 @@ MCPServer::ToolResult MCPServer::ToolHexdump(uint32_t address, uint32_t length) 
     if (!g_emulator || !g_emulator->m_mem) {
         return {false, "", "Emulator not initialized"};
     }
-    
+
     std::stringstream hex_str;
     hex_str << std::hex << std::setfill('0');
-    
+
     for (uint32_t i = 0; i < length; ++i) {
         if (i > 0 && i % 16 == 0) {
             hex_str << "\n";
@@ -1114,7 +1067,7 @@ MCPServer::ToolResult MCPServer::ToolHexdump(uint32_t address, uint32_t length) 
         uint8_t byte = g_emulator->m_mem->read8(address + i);
         hex_str << std::setw(2) << static_cast<int>(byte) << " ";
     }
-    
+
     nlohmann::json result_json;
     result_json["address"] = address;
     result_json["length"] = length;
@@ -1122,33 +1075,31 @@ MCPServer::ToolResult MCPServer::ToolHexdump(uint32_t address, uint32_t length) 
     return {true, result_json.dump(), ""};
 }
 
-MCPServer::ToolResult MCPServer::ToolGetGPUState() {
-    return {true, SerializeState(GetGPUState()), ""};
-}
+MCPServer::ToolResult MCPServer::ToolGetGPUState() { return {true, SerializeState(GetGPUState()), ""}; }
 
 MCPServer::ToolResult MCPServer::ToolListGPUCommands(uint32_t limit) {
     if (!g_emulator || !g_emulator->m_gpuLogger) {
         return {false, "", "Emulator or GPU Logger not initialized"};
     }
-    
+
     nlohmann::json result_json;
     result_json["limit"] = limit;
     result_json["command_count"] = 0;
     result_json["commands"] = nlohmann::json::array();
     result_json["logger_enabled"] = false;
-    
+
     // Check if GPU logger is enabled
     // Note: We can't directly check m_enabled as it's private, but we can try to enable it
     // For now, we'll return what's available
-    
+
     // The GPULogger stores commands in m_list which is private
     // Since we can't access it directly, we'll return a message about the limitation
     // and suggest enabling the GPU logger from the GUI
-    
+
     result_json["note"] = "GPU command logging requires GPU Logger to be enabled from the GUI (Debug -> GPU Logger)";
     result_json["gpu_logger_available"] = true;
     result_json["alternative"] = "Use get_gpu_state to read the GPU status register directly";
-    
+
     // Add GPU status info as a command entry
     if (g_emulator->m_gpu) {
         uint32_t status = g_emulator->m_gpu->readStatus();
@@ -1162,7 +1113,7 @@ MCPServer::ToolResult MCPServer::ToolListGPUCommands(uint32_t limit) {
         result_json["commands"].push_back(cmd);
         result_json["command_count"] = 1;
     }
-    
+
     return {true, result_json.dump(), ""};
 }
 
@@ -1206,12 +1157,8 @@ MCPServer::ToolResult MCPServer::ToolSetBreakpoint(uint32_t address) {
 MCPServer::ToolResult MCPServer::ToolGetBreakpoints() {
     nlohmann::json result_json = nlohmann::json::array();
     for (const auto& bp : GetBreakpoints()) {
-        result_json.push_back({
-            {"address", bp.address},
-            {"condition", bp.condition},
-            {"hit", bp.hit},
-            {"enabled", bp.enabled}
-        });
+        result_json.push_back(
+            {{"address", bp.address}, {"condition", bp.condition}, {"hit", bp.hit}, {"enabled", bp.enabled}});
     }
     return {true, result_json.dump(), ""};
 }
@@ -1233,41 +1180,37 @@ MCPServer::ToolResult MCPServer::ToolGetCallGraph(const std::string& function_na
     return {true, result_json.dump(), ""};
 }
 
-MCPServer::ToolResult MCPServer::ToolGetEmulatorState() {
-    return {true, GetEmulatorState(), ""};
-}
+MCPServer::ToolResult MCPServer::ToolGetEmulatorState() { return {true, GetEmulatorState(), ""}; }
 
 MCPServer::ToolResult MCPServer::ToolIsGameLoaded() {
     if (!g_emulator || !g_emulator->m_cdrom) {
         return {false, "", "Emulator not initialized"};
     }
-    
+
     nlohmann::json result;
-    
+
     // Check if an ISO/game is loaded
     auto iso = g_emulator->m_cdrom->getIso();
     bool has_iso = iso && !iso->failed();
-    
+
     result["game_loaded"] = has_iso;
     result["bios_only"] = !has_iso;
-    
+
     if (has_iso) {
         // Get ISO path
         std::string iso_path = iso->getIsoPath().string();
         result["iso_path"] = iso_path;
         result["iso_name"] = iso->getIsoPath().filename().string();
-        
+
         // Check if PC is in game code region (not BIOS)
         uint32_t pc = g_emulator->m_cpu->m_regs.pc;
-        bool in_bios = (pc >= 0xBFC00000 && pc < 0xBFC80000) || 
-                       (pc >= 0x1FC00000 && pc < 0x1FC80000);
-        bool in_game_ram = (pc >= 0x80000000 && pc < 0x80200000) || 
-                           (pc >= 0x00000000 && pc < 0x00200000);
-        
+        bool in_bios = (pc >= 0xBFC00000 && pc < 0xBFC80000) || (pc >= 0x1FC00000 && pc < 0x1FC80000);
+        bool in_game_ram = (pc >= 0x80000000 && pc < 0x80200000) || (pc >= 0x00000000 && pc < 0x00200000);
+
         result["emulation_active"] = in_game_ram;
         result["in_bios"] = in_bios;
         result["current_pc"] = pc;
-        
+
         // Try to detect if game has started by checking if RAM has been written
         // A simple heuristic: check if first 1KB of RAM is non-zero
         bool ram_initialized = false;
@@ -1286,7 +1229,7 @@ MCPServer::ToolResult MCPServer::ToolIsGameLoaded() {
         result["current_pc"] = static_cast<uint32_t>(g_emulator->m_cpu->m_regs.pc);
         result["ram_initialized"] = false;
     }
-    
+
     return {true, result.dump(), ""};
 }
 
@@ -1365,13 +1308,13 @@ MCPServer::ToolResult MCPServer::ToolPause() {
     if (!g_emulator) {
         return {false, "", "Emulator not initialized"};
     }
-    
+
     g_system->pause();
-    
+
     nlohmann::json result;
     result["status"] = "paused";
     result["message"] = "Emulator execution paused";
-    
+
     return {true, result.dump(), ""};
 }
 
@@ -1379,13 +1322,13 @@ MCPServer::ToolResult MCPServer::ToolResume() {
     if (!g_emulator) {
         return {false, "", "Emulator not initialized"};
     }
-    
+
     g_system->resume();
-    
+
     nlohmann::json result;
     result["status"] = "running";
     result["message"] = "Emulator execution resumed";
-    
+
     return {true, result.dump(), ""};
 }
 
@@ -1393,18 +1336,18 @@ MCPServer::ToolResult MCPServer::ToolStepIn() {
     if (!g_emulator || !g_emulator->m_debug) {
         return {false, "", "Emulator or debug subsystem not initialized"};
     }
-    
+
     g_emulator->m_debug->stepIn();
-    
+
     // Get updated CPU state after step
     CPUState cpu_state = GetCPUState();
-    
+
     nlohmann::json result;
     result["status"] = "stepped";
     result["message"] = "Stepped into next instruction";
     result["pc"] = cpu_state.pc;
     result["instruction"] = cpu_state.instruction_decoded;
-    
+
     return {true, result.dump(), ""};
 }
 
@@ -1412,18 +1355,18 @@ MCPServer::ToolResult MCPServer::ToolStepOver() {
     if (!g_emulator || !g_emulator->m_debug) {
         return {false, "", "Emulator or debug subsystem not initialized"};
     }
-    
+
     g_emulator->m_debug->stepOver();
-    
+
     // Get updated CPU state after step
     CPUState cpu_state = GetCPUState();
-    
+
     nlohmann::json result;
     result["status"] = "stepped_over";
     result["message"] = "Stepped over next instruction";
     result["pc"] = cpu_state.pc;
     result["instruction"] = cpu_state.instruction_decoded;
-    
+
     return {true, result.dump(), ""};
 }
 
@@ -1431,18 +1374,18 @@ MCPServer::ToolResult MCPServer::ToolStepOut() {
     if (!g_emulator || !g_emulator->m_debug) {
         return {false, "", "Emulator or debug subsystem not initialized"};
     }
-    
+
     g_emulator->m_debug->stepOut();
-    
+
     // Get updated CPU state after step
     CPUState cpu_state = GetCPUState();
-    
+
     nlohmann::json result;
     result["status"] = "stepped_out";
     result["message"] = "Stepped out of current function";
     result["pc"] = cpu_state.pc;
     result["instruction"] = cpu_state.instruction_decoded;
-    
+
     return {true, result.dump(), ""};
 }
 
@@ -1450,35 +1393,31 @@ MCPServer::ToolResult MCPServer::ToolRunToAddress(uint32_t address) {
     if (!g_emulator || !g_emulator->m_debug) {
         return {false, "", "Emulator or debug subsystem not initialized"};
     }
-    
+
     // Set a temporary breakpoint at the target address
     auto* bp = g_emulator->m_debug->addBreakpoint(
-        address, 
-        PCSX::Debug::BreakpointType::Exec, 
-        1, 
-        "MCP run_to_address",
+        address, PCSX::Debug::BreakpointType::Exec, 1, "MCP run_to_address",
         [](PCSX::Debug::Breakpoint* self, uint32_t addr, unsigned width, const char* cause) {
             g_system->pause();
             // Remove the temporary breakpoint after hitting it
             g_emulator->m_debug->removeBreakpoint(self);
             return true;
-        }
-    );
-    
+        });
+
     if (!bp) {
         return {false, "", "Failed to set temporary breakpoint"};
     }
-    
+
     // Resume execution
     g_system->resume();
-    
+
     nlohmann::json result;
     result["status"] = "running_to_address";
     result["target_address"] = address;
     std::stringstream ss_msg;
     ss_msg << "Emulator running until address 0x" << std::hex << std::setfill('0') << std::setw(8) << address;
     result["message"] = ss_msg.str();
-    
+
     return {true, result.dump(), ""};
 }
 
@@ -1486,179 +1425,156 @@ MCPServer::ToolResult MCPServer::ToolGetExecutionState() {
     if (!g_emulator) {
         return {false, "", "Emulator not initialized"};
     }
-    
+
     bool is_running = g_system->running();
-    
+
     nlohmann::json result;
     result["running"] = is_running;
     result["status"] = is_running ? "running" : "paused";
-    
+
     // Add current PC if paused
     if (!is_running && g_emulator->m_cpu) {
         result["pc"] = static_cast<uint32_t>(g_emulator->m_cpu->m_regs.pc);
         result["instruction"] = g_emulator->m_cpu->m_regs.code;
     }
-    
+
     return {true, result.dump(), ""};
 }
 
 MCPServer::ToolResult MCPServer::ToolHowToUseMCP() {
     nlohmann::json guide;
-    
+
     guide["title"] = "MCP Server Usage Guide for AI Assistants";
     guide["version"] = "1.0";
     guide["total_tools"] = 29;
-    
+
     // Overview
     guide["overview"] = {
         {"description", "The PCSX-Redux MCP server provides 29 tools for analyzing PlayStation 1 games in real-time"},
-        {"capabilities", nlohmann::json::array({
-            "Execution control (pause, resume, step through code)",
-            "Real MIPS R3000A disassembly",
-            "Memory inspection and search",
-            "GPU and DMA monitoring",
-            "Hardware register access",
-            "Breakpoint management",
-            "Call chain and graph tracing",
-            "Dynamic memory extraction for Ghidra overlay import"
-        })},
-        {"addressing", "All addresses accept hex strings (\"0x80010000\") or decimal numbers (2147549184)"}
-    };
-    
+        {"capabilities",
+         nlohmann::json::array({"Execution control (pause, resume, step through code)", "Real MIPS R3000A disassembly",
+                                "Memory inspection and search", "GPU and DMA monitoring", "Hardware register access",
+                                "Breakpoint management", "Call chain and graph tracing",
+                                "Dynamic memory extraction for Ghidra overlay import"})},
+        {"addressing", "All addresses accept hex strings (\"0x80010000\") or decimal numbers (2147549184)"}};
+
     // Quick Start Workflow
-    guide["quick_start"] = {
-        {"step1", {
-            {"action", "Check if game is loaded"},
-            {"tool", "is_game_loaded"},
-            {"arguments", nlohmann::json::object()},
-            {"why", "Verify emulator state before analysis"}
-        }},
-        {"step2", {
-            {"action", "Pause execution to inspect state"},
-            {"tool", "pause"},
-            {"arguments", nlohmann::json::object()},
-            {"why", "Freeze game to examine CPU/memory safely"}
-        }},
-        {"step3", {
-            {"action", "Get current CPU state"},
-            {"tool", "get_cpu_state"},
-            {"arguments", nlohmann::json::object()},
-            {"why", "See PC, registers, and disassembled instruction"}
-        }},
-        {"step4", {
-            {"action", "Examine memory layout"},
-            {"tool", "get_memory_map"},
-            {"arguments", nlohmann::json::object()},
-            {"why", "Understand RAM, BIOS, and hardware regions"}
-        }}
-    };
-    
+    guide["quick_start"] = {{"step1",
+                             {{"action", "Check if game is loaded"},
+                              {"tool", "is_game_loaded"},
+                              {"arguments", nlohmann::json::object()},
+                              {"why", "Verify emulator state before analysis"}}},
+                            {"step2",
+                             {{"action", "Pause execution to inspect state"},
+                              {"tool", "pause"},
+                              {"arguments", nlohmann::json::object()},
+                              {"why", "Freeze game to examine CPU/memory safely"}}},
+                            {"step3",
+                             {{"action", "Get current CPU state"},
+                              {"tool", "get_cpu_state"},
+                              {"arguments", nlohmann::json::object()},
+                              {"why", "See PC, registers, and disassembled instruction"}}},
+                            {"step4",
+                             {{"action", "Examine memory layout"},
+                              {"tool", "get_memory_map"},
+                              {"arguments", nlohmann::json::object()},
+                              {"why", "Understand RAM, BIOS, and hardware regions"}}}};
+
     // Common Analysis Patterns
     guide["analysis_patterns"] = {
-        {"finding_game_code", {
-            {"description", "Locate main game code and routines"},
-            {"steps", nlohmann::json::array({
-                "1. pause() - Stop execution",
-                "2. get_cpu_state() - Check current PC (usually in 0x80000000-0x801FFFFF range)",
-                "3. hexdump(pc_address, 256) - Read surrounding code",
-                "4. step_in() repeatedly - Trace execution flow",
-                "5. set_breakpoint(interesting_address) - Mark important locations"
-            })}
-        }},
-        {"finding_variables", {
-            {"description", "Locate game variables like health, score, position"},
-            {"steps", nlohmann::json::array({
-                "1. find_string(\"HP\") or search_bytes(\"pattern\") - Search RAM",
-                "2. hexdump(found_address, 64) - Examine surrounding data",
-                "3. Resume game and repeat search to find changing values",
-                "4. set_breakpoint(address) on suspected variable access",
-                "5. get_call_chain() when breakpoint hits - See what code accesses it"
-            })}
-        }},
-        {"tracing_function", {
-            {"description", "Understand what a function does"},
-            {"steps", nlohmann::json::array({
-                "1. set_breakpoint(function_start_address)",
-                "2. resume() - Let game run to breakpoint",
+        {"finding_game_code",
+         {{"description", "Locate main game code and routines"},
+          {"steps",
+           nlohmann::json::array({"1. pause() - Stop execution",
+                                  "2. get_cpu_state() - Check current PC (usually in 0x80000000-0x801FFFFF range)",
+                                  "3. hexdump(pc_address, 256) - Read surrounding code",
+                                  "4. step_in() repeatedly - Trace execution flow",
+                                  "5. set_breakpoint(interesting_address) - Mark important locations"})}}},
+        {"finding_variables",
+         {{"description", "Locate game variables like health, score, position"},
+          {"steps", nlohmann::json::array({"1. find_string(\"HP\") or search_bytes(\"pattern\") - Search RAM",
+                                           "2. hexdump(found_address, 64) - Examine surrounding data",
+                                           "3. Resume game and repeat search to find changing values",
+                                           "4. set_breakpoint(address) on suspected variable access",
+                                           "5. get_call_chain() when breakpoint hits - See what code accesses it"})}}},
+        {"tracing_function",
+         {{"description", "Understand what a function does"},
+          {"steps",
+           nlohmann::json::array(
+               {"1. set_breakpoint(function_start_address)", "2. resume() - Let game run to breakpoint",
                 "3. get_cpu_state() - Verify you're at function entry",
                 "4. step_in() or step_over() - Trace through function",
-                "5. Watch memory changes with hexdump() between steps",
-                "6. step_out() - Return to caller"
-            })}
-        }},
-        {"monitoring_gpu", {
-            {"description", "Analyze rendering and graphics"},
-            {"steps", nlohmann::json::array({
-                "1. get_gpu_state() - Check GPU status register",
-                "2. list_gpu_commands(20) - See recent GPU commands",
-                "3. get_dma_state(2) - Check GPU DMA channel (channel 2)",
-                "4. Correlate with CPU code using breakpoints"
-            })}
-        }},
-        {"extracting_overlays", {
-            {"description", "Capture dynamically loaded code for Ghidra analysis"},
-            {"steps", nlohmann::json::array({
-                "1. pause() - Halt at the moment the overlay is loaded",
-                "2. get_cpu_state() - Verify PC is in RAM range (0x80000000-0x801FFFFF)",
-                "3. dump_memory(address, length, tag, output_dir) - Capture the region",
-                "4. Import the resulting .bin + .json into Ghidra with ReduxOverlayImporter",
-                "5. snapshot_ram(tag, output_dir) - Alternatively dump full 2MB for diffing"
-            })}
-        }}
-    };
-    
+                "5. Watch memory changes with hexdump() between steps", "6. step_out() - Return to caller"})}}},
+        {"monitoring_gpu",
+         {{"description", "Analyze rendering and graphics"},
+          {"steps", nlohmann::json::array({"1. get_gpu_state() - Check GPU status register",
+                                           "2. list_gpu_commands(20) - See recent GPU commands",
+                                           "3. get_dma_state(2) - Check GPU DMA channel (channel 2)",
+                                           "4. Correlate with CPU code using breakpoints"})}}},
+        {"extracting_overlays",
+         {{"description", "Capture dynamically loaded code for Ghidra analysis"},
+          {"steps",
+           nlohmann::json::array({"1. pause() - Halt at the moment the overlay is loaded",
+                                  "2. get_cpu_state() - Verify PC is in RAM range (0x80000000-0x801FFFFF)",
+                                  "3. dump_memory(address, length, tag, output_dir) - Capture the region",
+                                  "4. Import the resulting .bin + .json into Ghidra with ReduxOverlayImporter",
+                                  "5. snapshot_ram(tag, output_dir) - Alternatively dump full 2MB for diffing"})}}}};
+
     // Tool Categories with Best Practices
     guide["tool_categories"] = {
-        {"execution_control", {
-            {"tools", nlohmann::json::array({"pause", "resume", "step_in", "step_over", "step_out", "run_to_address", "get_execution_state"})},
-            {"best_practice", "Always pause() before inspecting state. Use step_over() to skip library functions. Use run_to_address() for quick navigation."}
-        }},
-        {"cpu_memory", {
-            {"tools", nlohmann::json::array({"get_cpu_state", "get_memory_map", "get_memory_range", "hexdump", "find_string", "search_bytes"})},
-            {"best_practice", "get_cpu_state() shows real MIPS disassembly. Use hexdump() for small regions, get_memory_range() for bulk reads. Search RAM region for game data."}
-        }},
-        {"debugging", {
-            {"tools", nlohmann::json::array({"set_breakpoint", "get_breakpoints", "clear_breakpoint", "get_call_chain", "get_call_graph"})},
-            {"best_practice", "Set breakpoints on interesting addresses. Use get_call_chain() to understand execution context. Remember breakpoint addresses for later sessions."}
-        }},
-        {"hardware", {
-            {"tools", nlohmann::json::array({"list_hardware_registers", "read_hardware_register", "write_hardware_register", "get_dma_state", "get_gpu_state", "list_gpu_commands"})},
-            {"best_practice", "Monitor I_STAT for interrupts. Check DMA channels 2 (GPU) and 6 (OT). GPU status shows display mode and busy state."}
-        }},
-        {"state", {
-            {"tools", nlohmann::json::array({"get_emulator_state", "is_game_loaded"})},
-            {"best_practice", "Use get_emulator_state() for comprehensive snapshot. Check is_game_loaded() before starting analysis."}
-        }},
-        {"dynamic_extraction", {
-            {"tools", nlohmann::json::array({"dump_memory", "snapshot_ram"})},
-            {"best_practice", "Pause before dumping to get a consistent snapshot. Use descriptive tags (e.g. 'bg2_title_code'). Provide output_dir as the absolute path to your Ghidra project's extracted_overlays folder."}
-        }}
-    };
-    
+        {"execution_control",
+         {{"tools", nlohmann::json::array({"pause", "resume", "step_in", "step_over", "step_out", "run_to_address",
+                                           "get_execution_state"})},
+          {"best_practice",
+           "Always pause() before inspecting state. Use step_over() to skip library functions. Use run_to_address() "
+           "for quick navigation."}}},
+        {"cpu_memory",
+         {{"tools", nlohmann::json::array({"get_cpu_state", "get_memory_map", "get_memory_range", "hexdump",
+                                           "find_string", "search_bytes"})},
+          {"best_practice",
+           "get_cpu_state() shows real MIPS disassembly. Use hexdump() for small regions, get_memory_range() for bulk "
+           "reads. Search RAM region for game data."}}},
+        {"debugging",
+         {{"tools", nlohmann::json::array(
+                        {"set_breakpoint", "get_breakpoints", "clear_breakpoint", "get_call_chain", "get_call_graph"})},
+          {"best_practice",
+           "Set breakpoints on interesting addresses. Use get_call_chain() to understand execution context. Remember "
+           "breakpoint addresses for later sessions."}}},
+        {"hardware",
+         {{"tools",
+           nlohmann::json::array({"list_hardware_registers", "read_hardware_register", "write_hardware_register",
+                                  "get_dma_state", "get_gpu_state", "list_gpu_commands"})},
+          {"best_practice",
+           "Monitor I_STAT for interrupts. Check DMA channels 2 (GPU) and 6 (OT). GPU status shows display mode and "
+           "busy state."}}},
+        {"state",
+         {{"tools", nlohmann::json::array({"get_emulator_state", "is_game_loaded"})},
+          {"best_practice",
+           "Use get_emulator_state() for comprehensive snapshot. Check is_game_loaded() before starting analysis."}}},
+        {"dynamic_extraction",
+         {{"tools", nlohmann::json::array({"dump_memory", "snapshot_ram"})},
+          {"best_practice",
+           "Pause before dumping to get a consistent snapshot. Use descriptive tags (e.g. 'bg2_title_code'). Provide "
+           "output_dir as the absolute path to your Ghidra project's extracted_overlays folder."}}}};
+
     // Important Addresses
-    guide["memory_regions"] = {
-        {"ram", {
-            {"range", "0x00000000 - 0x001FFFFF (KUSEG) or 0x80000000 - 0x801FFFFF (KSEG0)"},
-            {"size", "2 MB"},
-            {"usage", "Main game code and data. Most analysis happens here."}
-        }},
-        {"scratchpad", {
-            {"range", "0x1F800000 - 0x1F8003FF"},
-            {"size", "1 KB"},
-            {"usage", "Fast CPU cache. Check for performance-critical code."}
-        }},
-        {"hardware_regs", {
-            {"range", "0x1F801000 - 0x1F802FFF"},
-            {"size", "8 KB"},
-            {"usage", "Memory control, interrupts, DMA, timers, GPU, etc."}
-        }},
-        {"bios", {
-            {"range", "0x1FC00000 - 0x1FC7FFFF (or 0xBFC00000 - 0xBFC7FFFF)"},
-            {"size", "512 KB"},
-            {"usage", "BIOS ROM. System initialization and kernel functions."}
-        }}
-    };
-    
+    guide["memory_regions"] = {{"ram",
+                                {{"range", "0x00000000 - 0x001FFFFF (KUSEG) or 0x80000000 - 0x801FFFFF (KSEG0)"},
+                                 {"size", "2 MB"},
+                                 {"usage", "Main game code and data. Most analysis happens here."}}},
+                               {"scratchpad",
+                                {{"range", "0x1F800000 - 0x1F8003FF"},
+                                 {"size", "1 KB"},
+                                 {"usage", "Fast CPU cache. Check for performance-critical code."}}},
+                               {"hardware_regs",
+                                {{"range", "0x1F801000 - 0x1F802FFF"},
+                                 {"size", "8 KB"},
+                                 {"usage", "Memory control, interrupts, DMA, timers, GPU, etc."}}},
+                               {"bios",
+                                {{"range", "0x1FC00000 - 0x1FC7FFFF (or 0xBFC00000 - 0xBFC7FFFF)"},
+                                 {"size", "512 KB"},
+                                 {"usage", "BIOS ROM. System initialization and kernel functions."}}}};
+
     // Tips and Tricks
     guide["tips"] = {
         {"tip1", "MIPS disassembly in get_cpu_state() shows actual instruction mnemonics (ADD, LW, BEQ, etc.)"},
@@ -1671,77 +1587,81 @@ MCPServer::ToolResult MCPServer::ToolHowToUseMCP() {
         {"tip8", "If PC is in BIOS range (0xBFC00000), game hasn't loaded yet or crashed."},
         {"tip9", "Combine step_in() with get_cpu_state() to trace instruction-by-instruction."},
         {"tip10", "Use get_emulator_state() to get everything at once - CPU, GPU, DMA, memory map, breakpoints."},
-        {"tip11", "dump_memory() writes a .bin + .json pair. Point output_dir at your Ghidra project's extracted_overlays/ folder for easy importing."}
-    };
-    
+        {"tip11",
+         "dump_memory() writes a .bin + .json pair. Point output_dir at your Ghidra project's extracted_overlays/ "
+         "folder for easy importing."}};
+
     // Error Handling
-    guide["common_errors"] = {
-        {"missing_parameter", {
-            {"error", "JSON parse error: key 'address' not found"},
-            {"cause", "Required parameter missing from tool call"},
-            {"fix", "Always provide required parameters. Example: {\"address\": \"0x80010000\"}"}
-        }},
-        {"invalid_address", {
-            {"error", "Address out of range or invalid format"},
-            {"cause", "Address outside valid memory regions"},
-            {"fix", "Check get_memory_map() for valid ranges. Use hex strings for clarity."}
-        }},
-        {"emulator_not_initialized", {
-            {"error", "Emulator not initialized"},
-            {"cause", "Emulator not fully started or crashed"},
-            {"fix", "Check is_game_loaded() first. Restart emulator if needed."}
-        }}
-    };
-    
+    guide["common_errors"] = {{"missing_parameter",
+                               {{"error", "JSON parse error: key 'address' not found"},
+                                {"cause", "Required parameter missing from tool call"},
+                                {"fix", "Always provide required parameters. Example: {\"address\": \"0x80010000\"}"}}},
+                              {"invalid_address",
+                               {{"error", "Address out of range or invalid format"},
+                                {"cause", "Address outside valid memory regions"},
+                                {"fix", "Check get_memory_map() for valid ranges. Use hex strings for clarity."}}},
+                              {"emulator_not_initialized",
+                               {{"error", "Emulator not initialized"},
+                                {"cause", "Emulator not fully started or crashed"},
+                                {"fix", "Check is_game_loaded() first. Restart emulator if needed."}}}};
+
     // Advanced Techniques
     guide["advanced"] = {
-        {"reverse_engineering", "Use set_breakpoint() + get_call_chain() to map function relationships. Build control flow graph manually."},
-        {"performance_profiling", "Use timers (TIMER0-2 registers) to measure code execution time. Check DMA transfer counts."},
-        {"save_state_analysis", "Pause at interesting moments, dump memory with hexdump(), compare across game states."},
-        {"overlay_extraction", "Use dump_memory() or snapshot_ram() to pull dynamically loaded code out of RAM. Import into Ghidra with ReduxOverlayImporter."},
-        {"cheat_finding", "Search for numeric values with search_bytes(), modify game state, trace what code reads them."}
-    };
-    
+        {"reverse_engineering",
+         "Use set_breakpoint() + get_call_chain() to map function relationships. Build control flow graph manually."},
+        {"performance_profiling",
+         "Use timers (TIMER0-2 registers) to measure code execution time. Check DMA transfer counts."},
+        {"save_state_analysis",
+         "Pause at interesting moments, dump memory with hexdump(), compare across game states."},
+        {"overlay_extraction",
+         "Use dump_memory() or snapshot_ram() to pull dynamically loaded code out of RAM. Import into Ghidra with "
+         "ReduxOverlayImporter."},
+        {"cheat_finding",
+         "Search for numeric values with search_bytes(), modify game state, trace what code reads them."}};
+
     // Example Complete Session
-    guide["example_session"] = nlohmann::json::array({
-        "// 1. Verify game is loaded",
-        "{\"tool\": \"is_game_loaded\"}",
-        "",
-        "// 2. Pause to inspect",
-        "{\"tool\": \"pause\"}",
-        "",
-        "// 3. Get current state with MIPS disassembly",
-        "{\"tool\": \"get_cpu_state\"}",
-        "// Returns: {\"pc\": \"0x80010000\", \"instruction_decoded\": \"ADDIU sp, sp, -32\", ...}",
-        "",
-        "// 4. Set breakpoint on suspected function",
-        "{\"tool\": \"set_breakpoint\", \"arguments\": {\"address\": \"0x80011000\"}}",
-        "",
-        "// 5. Resume and wait for breakpoint",
-        "{\"tool\": \"resume\"}",
-        "",
-        "// 6. When hit, trace the function",
-        "{\"tool\": \"get_call_chain\", \"arguments\": {\"max_depth\": 10}}",
-        "",
-        "// 7. Step through instruction by instruction",
-        "{\"tool\": \"step_in\"}",
-        "{\"tool\": \"get_cpu_state\"}",
-        "",
-        "// 8. Read memory around interesting address",
-        "{\"tool\": \"hexdump\", \"arguments\": {\"address\": \"0x80050000\", \"length\": 256}}",
-        "",
-        "// 9. Search for game strings",
-        "{\"tool\": \"find_string\", \"arguments\": {\"pattern\": \"PLAYER\", \"region\": \"ram\"}}",
-        "",
-        "// 10. Dump dynamically loaded code for Ghidra",
-        "{\"tool\": \"dump_memory\", \"arguments\": {\"address\": \"0x80010000\", \"length\": 65536, \"tag\": \"bg2_title_code\", \"output_dir\": \"/path/to/ghidra_project/extracted_overlays\"}}",
-        "",
-        "// 11. Or snapshot the entire 2MB RAM for diffing",
-        "{\"tool\": \"snapshot_ram\", \"arguments\": {\"tag\": \"bg2_ram_full\", \"output_dir\": \"/path/to/ghidra_project/extracted_overlays\"}}"
-    });
-    
-    guide["remember"] = "You have full control over PS1 emulation. Pause, inspect, step, search, and analyze. Build understanding incrementally. Use breakpoints to mark discoveries.";
-    
+    guide["example_session"] = nlohmann::json::array(
+        {"// 1. Verify game is loaded",
+         "{\"tool\": \"is_game_loaded\"}",
+         "",
+         "// 2. Pause to inspect",
+         "{\"tool\": \"pause\"}",
+         "",
+         "// 3. Get current state with MIPS disassembly",
+         "{\"tool\": \"get_cpu_state\"}",
+         "// Returns: {\"pc\": \"0x80010000\", \"instruction_decoded\": \"ADDIU sp, sp, -32\", ...}",
+         "",
+         "// 4. Set breakpoint on suspected function",
+         "{\"tool\": \"set_breakpoint\", \"arguments\": {\"address\": \"0x80011000\"}}",
+         "",
+         "// 5. Resume and wait for breakpoint",
+         "{\"tool\": \"resume\"}",
+         "",
+         "// 6. When hit, trace the function",
+         "{\"tool\": \"get_call_chain\", \"arguments\": {\"max_depth\": 10}}",
+         "",
+         "// 7. Step through instruction by instruction",
+         "{\"tool\": \"step_in\"}",
+         "{\"tool\": \"get_cpu_state\"}",
+         "",
+         "// 8. Read memory around interesting address",
+         "{\"tool\": \"hexdump\", \"arguments\": {\"address\": \"0x80050000\", \"length\": 256}}",
+         "",
+         "// 9. Search for game strings",
+         "{\"tool\": \"find_string\", \"arguments\": {\"pattern\": \"PLAYER\", \"region\": \"ram\"}}",
+         "",
+         "// 10. Dump dynamically loaded code for Ghidra",
+         "{\"tool\": \"dump_memory\", \"arguments\": {\"address\": \"0x80010000\", \"length\": 65536, \"tag\": "
+         "\"bg2_title_code\", \"output_dir\": \"/path/to/ghidra_project/extracted_overlays\"}}",
+         "",
+         "// 11. Or snapshot the entire 2MB RAM for diffing",
+         "{\"tool\": \"snapshot_ram\", \"arguments\": {\"tag\": \"bg2_ram_full\", \"output_dir\": "
+         "\"/path/to/ghidra_project/extracted_overlays\"}}"});
+
+    guide["remember"] =
+        "You have full control over PS1 emulation. Pause, inspect, step, search, and analyze. Build understanding "
+        "incrementally. Use breakpoints to mark discoveries.";
+
     return {true, guide.dump(2), ""};  // Pretty print with 2-space indent
 }
 
@@ -1779,7 +1699,8 @@ static std::filesystem::path resolveOutputDirectory(const std::string& output_di
     return p;
 }
 
-MCPServer::ToolResult MCPServer::ToolDumpMemory(uint32_t address, uint32_t length, const std::string& tag, const std::string& output_dir) {
+MCPServer::ToolResult MCPServer::ToolDumpMemory(uint32_t address, uint32_t length, const std::string& tag,
+                                                const std::string& output_dir) {
     if (!g_emulator || !g_emulator->m_mem) {
         return {false, "", "Emulator not initialized"};
     }
@@ -1825,7 +1746,7 @@ MCPServer::ToolResult MCPServer::ToolDumpMemory(uint32_t address, uint32_t lengt
         manifest["base_address"] = addrSS.str();
         manifest["size"] = length;
         manifest["tag"] = tag;
-       manifest["dumped_at_pc"] = pc;
+        manifest["dumped_at_pc"] = pc;
         manifest["timestamp"] = ts;
         manifest["filename"] = baseName + ".bin";
         manifest["manifest_filename"] = baseName + ".json";
@@ -2021,8 +1942,7 @@ MCPServer::ToolResult MCPServer::ToolPadSet(uint32_t pressed, uint32_t frames) {
     result["pressed"] = pressed;
     result["status"] = status;
     result["frames"] = frames;
-    result["message"] = frames ? "override active for the requested frame count"
-                               : "override active until pad_clear";
+    result["message"] = frames ? "override active for the requested frame count" : "override active until pad_clear";
     return {true, result.dump(), ""};
 }
 
@@ -2031,4 +1951,4 @@ MCPServer::ToolResult MCPServer::ToolPadClear() {
     return {true, "{\"status\":\"cleared\"}", ""};
 }
 
-} // namespace PCSX
+}  // namespace PCSX

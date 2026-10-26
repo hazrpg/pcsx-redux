@@ -27,8 +27,8 @@
 #include <uv.h>
 
 #include <algorithm>
-#include <charconv>
 #include <cctype>
+#include <charconv>
 #include <magic_enum/magic_enum_all.hpp>
 #include <map>
 #include <memory>
@@ -42,6 +42,7 @@
 #include "core/cdrom.h"
 #include "core/debug.h"
 #include "core/gpu.h"
+#include "core/mcp-server.h"
 #include "core/psxemulator.h"
 #include "core/psxmem.h"
 #include "core/r3000a.h"
@@ -54,7 +55,6 @@
 #include "support/strings-helpers.h"
 #include "supportpsx/iso9660-builder.h"
 #include "uriparser/Uri.h"
-#include "core/mcp-server.h"
 
 using nlohmann::json;
 
@@ -63,9 +63,8 @@ namespace {
 bool WantsSSE(const PCSX::RequestData& request) {
     auto isEventStreamHeader = [](const std::string& value) {
         std::string lowered = value;
-        std::transform(lowered.begin(), lowered.end(), lowered.begin(), [](unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
+        std::transform(lowered.begin(), lowered.end(), lowered.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         return lowered.find("text/event-stream") != std::string::npos;
     };
     for (const auto& header : request.headers) {
@@ -77,9 +76,8 @@ bool WantsSSE(const PCSX::RequestData& request) {
     }
     if (!request.urlData.query.empty()) {
         std::string loweredQuery = request.urlData.query;
-        std::transform(loweredQuery.begin(), loweredQuery.end(), loweredQuery.begin(), [](unsigned char c) {
-            return static_cast<char>(std::tolower(c));
-        });
+        std::transform(loweredQuery.begin(), loweredQuery.end(), loweredQuery.begin(),
+                       [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
         if ((loweredQuery.find("transport=sse") != std::string::npos) ||
             (loweredQuery.find("stream=sse") != std::string::npos) ||
             (loweredQuery.find("sse=true") != std::string::npos)) {
@@ -799,45 +797,44 @@ class ScreenExecutor : public PCSX::WebExecutor {
 };
 
 class MCPExecutor : public PCSX::WebExecutor {
-    virtual bool match(PCSX::WebClient* client, const PCSX::UrlData& urldata) final {
-        return urldata.path == "/mcp";
-    }
+    virtual bool match(PCSX::WebClient* client, const PCSX::UrlData& urldata) final { return urldata.path == "/mcp"; }
     virtual bool execute(PCSX::WebClient* client, PCSX::RequestData& request) final {
         if (request.method == PCSX::RequestData::Method::HTTP_POST) {
             try {
                 std::string response_str = PCSX::MCPServer::HandleMCPRequest(request.body.asString());
-                client->write("HTTP/1.1 200 OK\r\n"
-                            "Content-Type: application/json\r\n"
-                            "Content-Length: " + std::to_string(response_str.size()) + "\r\n\r\n" + response_str);
+                client->write(
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: application/json\r\n"
+                    "Content-Length: " +
+                    std::to_string(response_str.size()) + "\r\n\r\n" + response_str);
             } catch (const json::parse_error& e) {
                 json error_response = {
                     {"jsonrpc", "2.0"},
                     {"id", nullptr},
-                    {"error", {
-                        {"code", -32700},
-                        {"message", "Parse error: " + std::string(e.what())}
-                    }}
-                };
+                    {"error", {{"code", -32700}, {"message", "Parse error: " + std::string(e.what())}}}};
                 write200(client, error_response);
             }
             return true;
         } else if (request.method == PCSX::RequestData::Method::HTTP_OPTIONS) {
-            client->write("HTTP/1.1 204 No Content\r\n"
-                        "Access-Control-Allow-Origin: *\r\n"
-                        "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
-                        "Access-Control-Allow-Headers: Content-Type\r\n"
-                        "Access-Control-Max-Age: 86400\r\n\r\n");
+            client->write(
+                "HTTP/1.1 204 No Content\r\n"
+                "Access-Control-Allow-Origin: *\r\n"
+                "Access-Control-Allow-Methods: POST, GET, OPTIONS\r\n"
+                "Access-Control-Allow-Headers: Content-Type\r\n"
+                "Access-Control-Max-Age: 86400\r\n\r\n");
             return true;
         } else if (request.method == PCSX::RequestData::Method::HTTP_HTTP_GET) {
             if (WantsSSE(request)) {
                 request.keepAlive = true;
-                client->write("HTTP/1.1 200 OK\r\n"
-                              "Content-Type: text/event-stream\r\n"
-                              "Cache-Control: no-cache\r\n"
-                              "Connection: keep-alive\r\n"
-                              "Access-Control-Allow-Origin: *\r\n\r\n");
-                client->write("event: ping\r\n"
-                              "data: {}\r\n\r\n");
+                client->write(
+                    "HTTP/1.1 200 OK\r\n"
+                    "Content-Type: text/event-stream\r\n"
+                    "Cache-Control: no-cache\r\n"
+                    "Connection: keep-alive\r\n"
+                    "Access-Control-Allow-Origin: *\r\n\r\n");
+                client->write(
+                    "event: ping\r\n"
+                    "data: {}\r\n\r\n");
             } else {
                 client->write("HTTP/1.1 405 Method Not Allowed\r\nAllow: POST, OPTIONS\r\n\r\n");
             }
@@ -1225,11 +1222,11 @@ struct PCSX::WebClient::WebClientImpl {
         m_requestData.method = static_cast<RequestData::Method>(m_httpParser.method);
         // Don't log OPTIONS requests or GET requests to /mcp (they're usually connection probes)
         bool shouldLog = m_requestData.method != RequestData::Method::HTTP_OPTIONS;
-        if (shouldLog && m_requestData.method == RequestData::Method::HTTP_HTTP_GET && 
+        if (shouldLog && m_requestData.method == RequestData::Method::HTTP_HTTP_GET &&
             m_requestData.urlData.path == "/mcp") {
             shouldLog = false;  // Suppress MCP GET probe logging
         }
-        
+
         if (shouldLog) {
             auto methodName = magic_enum::enum_name(m_requestData.method);
             g_system->log(LogClass::WEBSERVER, "Received web api request (%.*s), path: %s, query: %s\n",

@@ -25,9 +25,9 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <magic_enum/magic_enum_all.hpp>
-#include <atomic>
 #include <optional>
 
 #include "core/psxemulator.h"

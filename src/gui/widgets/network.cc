@@ -172,8 +172,8 @@ next restart of the server.)"));
         ImGuiHelpers::ShowHelpMarker(_(R"(Serves the Model Context Protocol (MCP)
 endpoint at /mcp on the web server, letting external
 AI tools query and control the emulator in real time.)"));
-        changed |= ImGui::InputInt(_("MCP Server Port"),
-                                   &debugSettings.get<Emulator::DebugSettings::MCPServerPort>().value);
+        changed |=
+            ImGui::InputInt(_("MCP Server Port"), &debugSettings.get<Emulator::DebugSettings::MCPServerPort>().value);
         ImGuiHelpers::ShowHelpMarker(_(R"(MCP is served through the web server.
 If the web server is disabled, enabling MCP
 reuses this port as the web server port.)"));
