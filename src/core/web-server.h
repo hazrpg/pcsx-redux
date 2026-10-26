@@ -86,6 +86,7 @@ struct RequestData {
     std::multimap<std::string, std::string> headers;
     std::multimap<std::string, std::string> form;
     Slice body;
+    bool keepAlive = false;
 };
 
 class WebClient;
