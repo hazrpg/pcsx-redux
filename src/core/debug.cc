@@ -356,7 +356,9 @@ void PCSX::Debug::checkBP(uint32_t address, BreakpointType type, uint32_t width,
     }
 
     auto end = m_breakpoints.end();
-    uint32_t normalizedAddress = normalizeAddress(address & ~0xe0000000);
+    // The tree is keyed by masked physical address (see addBreakpoint); keep the
+    // lookup in the same space or virtual/physical aliases never match.
+    uint32_t normalizedAddress = address & ~0xe0000000;
 
     BreakpointTemporaryListType torun;
     for (auto it = m_breakpoints.find(normalizedAddress, normalizedAddress + width - 1); it != end; it++) {
