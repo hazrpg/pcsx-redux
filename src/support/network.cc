@@ -73,7 +73,7 @@ void Endpoint::settled() {
 // Server
 //
 
-void Server::start(uv_loop_t* loop, int port) {
+void Server::start(uv_loop_t* loop, int port, bool listenAll) {
     if (m_async) {
         // The previous listener has not delivered its nullptr yet. If it is
         // still up or coming up, there is nothing to do. If it has already
@@ -83,14 +83,16 @@ void Server::start(uv_loop_t* loop, int port) {
         if ((current == Status::Running) || (current == Status::Starting)) return;
         m_loop = loop;
         m_port = port;
+        m_listenAll = listenAll;
         m_restartPending = true;
         return;
     }
     m_loop = loop;
     m_port = port;
+    m_listenAll = listenAll;
     onStarting();
     m_async = new uv_async_t();
-    m_listener.start(port, loop, m_async, [this](UvFifo* fifo) { onListenerEvent(fifo); });
+    m_listener.start(port, loop, m_async, [this](UvFifo* fifo) { onListenerEvent(fifo); }, m_listenAll);
 }
 
 void Server::onListenerEvent(UvFifo* fifo) {

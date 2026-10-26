@@ -807,7 +807,8 @@ PCSX::WebServer::WebServer() : Network::Server("Web Server"), m_listener(g_syste
     m_listener.listen<Events::SettingsLoaded>([this](const auto& event) {
         auto& debugSettings = g_emulator->settings.get<Emulator::SettingDebugSettings>();
         if (debugSettings.get<Emulator::DebugSettings::WebServer>() && !isRunning()) {
-            start(g_system->getLoop(), debugSettings.get<Emulator::DebugSettings::WebServerPort>());
+            start(g_system->getLoop(), debugSettings.get<Emulator::DebugSettings::WebServerPort>(),
+                  debugSettings.get<Emulator::DebugSettings::WebServerListenAll>());
         }
     });
     m_listener.listen<Events::Quitting>([this](const auto& event) {

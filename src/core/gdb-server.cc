@@ -42,7 +42,8 @@ PCSX::GdbServer::GdbServer() : Network::Server("GDB Server"), m_listener(g_syste
     m_listener.listen<Events::SettingsLoaded>([this](const auto& event) {
         auto& settings = g_emulator->settings.get<Emulator::SettingDebugSettings>();
         if (settings.get<Emulator::DebugSettings::GdbServer>() && !isRunning()) {
-            start(g_system->getLoop(), settings.get<Emulator::DebugSettings::GdbServerPort>());
+            start(g_system->getLoop(), settings.get<Emulator::DebugSettings::GdbServerPort>(),
+                  settings.get<Emulator::DebugSettings::GdbServerListenAll>());
         }
     });
     m_listener.listen<Events::Quitting>([this](const auto& event) {

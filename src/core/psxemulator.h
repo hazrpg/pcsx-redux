@@ -129,9 +129,11 @@ class Emulator {
         };
         typedef Setting<GdbLog, TYPESTRING("GdbLog"), GdbLog::TTY> GdbLogSetting;
         typedef Setting<int, TYPESTRING("GdbServerPort"), 3333> GdbServerPort;
+        typedef Setting<bool, TYPESTRING("GdbServerListenAll"), false> GdbServerListenAll;
         typedef Setting<bool, TYPESTRING("GdbServerTrace"), false> GdbServerTrace;
         typedef Setting<bool, TYPESTRING("WebServer"), false> WebServer;
         typedef Setting<int, TYPESTRING("WebServerPort"), 8080> WebServerPort;
+        typedef Setting<bool, TYPESTRING("WebServerListenAll"), false> WebServerListenAll;
         typedef Setting<uint32_t, TYPESTRING("KernelCallA0_00_1f"), 0xffffffff> KernelCallA0_00_1f;
         typedef Setting<uint32_t, TYPESTRING("KernelCallA0_20_3f"), 0xffffffff> KernelCallA0_20_3f;
         typedef Setting<uint32_t, TYPESTRING("KernelCallA0_40_5f"), 0xffffffff> KernelCallA0_40_5f;
@@ -149,6 +151,7 @@ class Emulator {
         typedef SettingString<TYPESTRING("PCdrvNetAllow")> PCdrvNetAllow;
         typedef Setting<bool, TYPESTRING("SIO1Server"), false> SIO1Server;
         typedef Setting<int, TYPESTRING("SIO1ServerPort"), 6699> SIO1ServerPort;
+        typedef Setting<bool, TYPESTRING("SIO1ServerListenAll"), false> SIO1ServerListenAll;
         typedef Setting<bool, TYPESTRING("SIO1Client"), false> SIO1Client;
         typedef SettingString<TYPESTRING("SIO1Clienthost")> SIO1ClientHost;
         typedef Setting<int, TYPESTRING("SIO1ClientPort"), 6699> SIO1ClientPort;
@@ -158,12 +161,12 @@ class Emulator {
         };
         typedef Setting<SIO1Mode, TYPESTRING("SIO1Mode"), SIO1Mode::Protobuf> SIO1ModeSetting;
         typedef Settings<Debug, Trace, KernelLog, FirstChanceException, SkipISR, LoggingCDROM, LoggingHWCDROM,
-                         GdbServer, GdbManifest, GdbLogSetting, GdbServerPort, GdbServerTrace, WebServer, WebServerPort,
-                         KernelCallA0_00_1f, KernelCallA0_20_3f, KernelCallA0_40_5f, KernelCallA0_60_7f,
-                         KernelCallA0_80_9f, KernelCallA0_a0_bf, KernelCallB0_00_1f, KernelCallB0_20_3f,
-                         KernelCallB0_40_5f, KernelCallC0_00_1f, DemangledSymbols, PCdrv, PCdrvBase, PCdrvNet,
-                         PCdrvNetAllow, SIO1Server, SIO1ServerPort, SIO1Client, SIO1ClientHost, SIO1ClientPort,
-                         SIO1ModeSetting>
+                         GdbServer, GdbManifest, GdbLogSetting, GdbServerPort, GdbServerListenAll, GdbServerTrace,
+                         WebServer, WebServerPort, WebServerListenAll, KernelCallA0_00_1f, KernelCallA0_20_3f,
+                         KernelCallA0_40_5f, KernelCallA0_60_7f, KernelCallA0_80_9f, KernelCallA0_a0_bf,
+                         KernelCallB0_00_1f, KernelCallB0_20_3f, KernelCallB0_40_5f, KernelCallC0_00_1f,
+                         DemangledSymbols, PCdrv, PCdrvBase, PCdrvNet, PCdrvNetAllow, SIO1Server, SIO1ServerPort,
+                         SIO1ServerListenAll, SIO1Client, SIO1ClientHost, SIO1ClientPort, SIO1ModeSetting>
             type;
     };
     typedef SettingNested<TYPESTRING("Debug"), DebugSettings::type> SettingDebugSettings;

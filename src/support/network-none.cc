@@ -26,9 +26,10 @@
 
 namespace PCSX::Network {
 
-void Server::start(uv_loop_t* loop, int port) {
+void Server::start(uv_loop_t* loop, int port, bool listenAll) {
     m_loop = loop;
     m_port = port;
+    m_listenAll = listenAll;
 }
 
 void Server::stop() { settled(); }

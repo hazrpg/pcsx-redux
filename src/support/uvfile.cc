@@ -1106,7 +1106,7 @@ void PCSX::UvFifoListener::failed(int code) {
 }
 
 void PCSX::UvFifoListener::start(unsigned port, uv_loop_t *loop, uv_async_t *async,
-                                 std::function<void(UvFifo *)> &&cb) {
+                                 std::function<void(UvFifo *)> &&cb, bool listenAll) {
     m_cb = std::move(cb);
     async->data = this;
     m_async = async;
@@ -1119,12 +1119,12 @@ void PCSX::UvFifoListener::start(unsigned port, uv_loop_t *loop, uv_async_t *asy
             self->m_cb(fifo);
         }
     });
-    request([this, port](auto loop) {
+    request([this, port, listenAll](auto loop) {
         uv_tcp_init(loop, &m_server);
         m_server.data = this;
 
         struct sockaddr_in bindAddr;
-        int result = uv_ip4_addr("0.0.0.0", port, &bindAddr);
+        int result = uv_ip4_addr(listenAll ? "0.0.0.0" : "127.0.0.1", port, &bindAddr);
         if (result != 0) {
             failed(result);
             return;
