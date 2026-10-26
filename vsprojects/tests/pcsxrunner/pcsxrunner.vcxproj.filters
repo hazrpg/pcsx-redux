@@ -150,6 +150,9 @@
     <ClCompile Include="..\..\..\tests\core\i18n.cc">
       <Filter>Source Files</Filter>
     </ClCompile>
+    <ClCompile Include="..\..\..\tests\core\mcp-server.cc">
+      <Filter>Source Files</Filter>
+    </ClCompile>
     <ClCompile Include="..\..\..\tests\pcsxrunner\gpu-threaded.cc">
       <Filter>Source Files</Filter>
     </ClCompile>
